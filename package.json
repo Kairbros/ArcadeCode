@@ -1,0 +1,74 @@
+{
+  "name": "bomberman-procedural",
+  "displayName": "Arcade (Bomberman y Karts)",
+  "description": "Hub de juegos multijugador dentro de VS Code: Bomberman y Karts en modo 7",
+  "version": "0.1.0",
+  "publisher": "local",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [],
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "type": "webview",
+          "id": "bomberman.view",
+          "name": "Arcade"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "bomberman.play",
+        "title": "Arcade: Abrir en pestaña grande",
+        "icon": "$(link-external)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "bomberman.play",
+          "when": "view == bomberman.view",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Bomberman",
+      "properties": {
+        "bomberman.serverUrl": {
+          "type": "string",
+          "default": "https://bomber-five-tawny.vercel.app",
+          "markdownDescription": "URL del servidor de emparejamiento para jugar en red: tu despliegue de Vercel (p. ej. `https://mi-bomberman.vercel.app`) o el servidor local (`http://IP-DEL-EQUIPO:8000`)."
+        },
+        "bomberman.grayscale": {
+          "type": "boolean",
+          "default": false,
+          "description": "Muestra el juego en escala de grises (también con la tecla G o desde el menú)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build:ext": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.cjs",
+    "build:game": "esbuild src/game/main.ts --bundle --format=iife --target=es2020 --outfile=dist/game.js",
+    "build:web": "esbuild src/game/main.ts --bundle --format=iife --target=es2020 --minify --outfile=web/dist/main.js",
+    "build": "npm run build:ext && npm run build:game",
+    "watch": "esbuild src/game/main.ts --bundle --format=iife --target=es2020 --outfile=dist/game.js --watch",
+    "serve": "node scripts/serve.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "@types/vscode": "1.90.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

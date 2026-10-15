@@ -1,0 +1,219 @@
+// Punto de entrada en el navegador / webview de VS Code: menú del hub, partidas locales y en red.
+import { SCREEN_H, SCREEN_W } from "./bomberman/config";
+import { BG_COLOR, DEFAULT_SIZE, PLAYER_CONTROLS } from "./core/config";
+import { Game } from "./bomberman/game";
+import { gameName, type GameId } from "./hub";
+import { LocalController } from "./bomberman/input";
+import { KartsHost } from "./karts/game";
+import { KartsInput } from "./karts/input";
+import { Keyboard, isTyping } from "./core/keyboard";
+import { GuestSession } from "./net/guest";
+import { HostSession } from "./net/host";
+import { TRANSPORT_LABEL } from "./net/protocol";
+import { SignalClient } from "./net/signaling";
+import { css } from "./core/draw";
+import { onSettingsChange, setGrayscale, settings } from "./core/settings";
+import { Menu } from "./ui/menu";
+
+const canvas = document.getElementById("game") as HTMLCanvasElement;
+const ctx = canvas.getContext("2d")!;
+
+// Teclas cuyo comportamiento por defecto (scroll, etc.) se anula mientras se juega.
+const captured = new Set([
+  ...PLAYER_CONTROLS.flatMap((s) => [...s.up, ...s.down, ...s.left, ...s.right, ...s.bomb]),
+  "ShiftRight", "KeyC", "KeyE",
+]);
+const keyboard = new Keyboard(window, captured);
+const menu = new Menu();
+
+// --- Servidor de emparejamiento ---
+// En la web se usa la propia URL; en VS Code la inyecta la extensión (ajuste bomberman.serverUrl).
+const injected = (window as { BOMBERMAN_CONFIG?: { serverUrl?: string } }).BOMBERMAN_CONFIG;
+let signalUrl: string | null = null;
+let onlineError: string | null = null;
+if (injected) {
+  if (injected.serverUrl) signalUrl = injected.serverUrl.replace(/\/$/, "") + "/api/signal";
+  else onlineError = "Configura el ajuste «bomberman.serverUrl» de VS Code con la URL de tu despliegue.";
+} else if (location.protocol.startsWith("http")) {
+  signalUrl = new URL("api/signal", location.href).href;
+} else {
+  onlineError = "Abre el juego desde el servidor (npm run serve) para jugar en red.";
+}
+const signal = signalUrl ? new SignalClient(signalUrl) : null;
+
+// --- Pantalla activa ---
+interface Screen {
+  /** Tamaño lógico del juego (el lienzo se escala para que quepa). */
+  readonly size: readonly [number, number];
+  update(dt: number): void;
+  draw(ctx: CanvasRenderingContext2D, pixelScale: number): void;
+  key?(code: string): void;
+}
+const MENU_SIZE = DEFAULT_SIZE;
+const BOMBER_SIZE = [SCREEN_W, SCREEN_H] as const;
+let screen: Screen | null = null;
+let host: HostSession | null = null;
+let guest: GuestSession | null = null;
+
+function showMain(error = "") {
+  host?.close();
+  guest?.close();
+  host = guest = null;
+  screen = null;
+  menu.showMain(
+    {
+      local: () => menu.showPicker("Jugar en este equipo", startLocal, () => showMain()),
+      host: () => menu.showPicker("¿A qué jugáis?", startHost, () => showMain()),
+      join: startJoin,
+      toggleGray,
+    },
+    onlineError,
+    settings.grayscale,
+    error,
+  );
+}
+
+function toggleGray() {
+  setGrayscale(!settings.grayscale);
+}
+
+// Mantiene el botón del menú al día si se cambia con la tecla G o desde los ajustes de VS Code.
+onSettingsChange(() => {
+  const btn = document.querySelector<HTMLButtonElement>('[data-a="gray"]');
+  if (!btn) return;
+  btn.textContent = `Escala de grises: ${settings.grayscale ? "Sí" : "No"}`;
+  btn.setAttribute("aria-pressed", String(settings.grayscale));
+});
+
+function play(s: Screen) {
+  screen = s;
+  menu.hide();
+  canvas.focus();
+}
+
+function startLocal(id: GameId) {
+  if (id === "karts") {
+    // Un jugador contra la IA; vale WASD o flechas.
+    const game = new KartsHost(new KartsInput(keyboard), 0, "local");
+    play({ size: game.size, update: (dt) => game.update(dt), draw: (c) => game.draw(c), key: (code) => game.key(code) });
+    return;
+  }
+  const params = new URLSearchParams(location.search);
+  const players = params.get("players") === "1" ? 1 : 2;
+  const seed = Number(params.get("seed")) || undefined;
+  const sources = PLAYER_CONTROLS.map((scheme) => new LocalController(keyboard, scheme));
+  const game = new Game(sources, players, seed, "local");
+  play({ size: BOMBER_SIZE, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.handleKey(code) });
+}
+
+async function startHost(id: GameId) {
+  if (!signal) return;
+  const session = new HostSession(signal, id);
+  host = session;
+  menu.showMessage("Creando sala...", "Contactando con el servidor de emparejamiento.");
+  const refresh = () => {
+    if (host !== session || session.game) return;
+    const names = [
+      "Jugador 1 (tú, anfitrión)",
+      ...session.readyPeers.map((p, i) => `Jugador ${i + 2} · ${TRANSPORT_LABEL[p.transport]}`),
+    ];
+    menu.showLobby(session.code, gameName(id), names, start, () => showMain());
+  };
+  const start = () => {
+    session.start(keyboard);
+    const game = session.game!;
+    play({ size: game.size, update: (dt) => session.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code) });
+  };
+  session.onChange = refresh;
+  session.onError = (msg) => host === session && !session.game && showMain(msg);
+  try {
+    await session.open();
+    refresh();
+  } catch (err) {
+    if (host === session) showMain((err as Error).message);
+  }
+}
+
+async function startJoin(code: string) {
+  if (!signal) return;
+  const session = new GuestSession(signal, keyboard);
+  guest = session;
+  screen = session;
+  menu.showMessage("Conectando...", `Uniéndose a la sala ${code}. Probando conexión directa...`, {
+    label: "Cancelar",
+    onClick: () => showMain(),
+  });
+  session.onStatus = (status) => {
+    if (guest !== session) return;
+    if (status === "relay-fallback") {
+      menu.showMessage("Usando Vercel como puente", "La red no permite conexión directa entre equipos. Conectando por Vercel...", {
+        label: "Cancelar",
+        onClick: () => showMain(),
+      });
+    } else if (status === "waiting") {
+      const how = session.transport === "relay" ? "vía Vercel" : "directa";
+      menu.showMessage(`Conectado (${how})`, "Esperando a que el anfitrión empiece la partida...", {
+        label: "Salir",
+        onClick: () => showMain(),
+      });
+    } else if (status === "playing") {
+      menu.hide();
+      canvas.focus();
+    } else if (status === "lost") {
+      menu.showMessage("Conexión perdida", "Se ha cortado la conexión con el anfitrión.", {
+        label: "Volver al menú",
+        onClick: () => showMain(),
+      });
+    }
+  };
+  try {
+    await session.connect(code);
+  } catch (err) {
+    if (guest === session) showMain((err as Error).message);
+  }
+}
+
+window.addEventListener("keydown", (ev) => {
+  if (ev.repeat || isTyping(ev)) return;
+  if (ev.code === "Escape" && screen) showMain();
+  else if (ev.code === "KeyG") toggleGray();
+  else if (!menu.visible) screen?.key?.(ev.code);
+});
+
+// --- Lienzo: escala a la ventana manteniendo proporción y nitidez ---
+let pixelScale = 1;
+let fitted: readonly [number, number] = [0, 0];
+function fit(size: readonly [number, number]) {
+  const [w, h] = size;
+  const scale = Math.max(0.1, Math.min(window.innerWidth / w, window.innerHeight / h));
+  const dpr = window.devicePixelRatio || 1;
+  pixelScale = scale * dpr;
+  canvas.style.width = `${Math.floor(w * scale)}px`;
+  canvas.style.height = `${Math.floor(h * scale)}px`;
+  canvas.width = Math.floor(w * pixelScale);
+  canvas.height = Math.floor(h * pixelScale);
+  ctx.setTransform(pixelScale, 0, 0, pixelScale, 0, 0);
+  fitted = size;
+}
+window.addEventListener("resize", () => fit(fitted));
+canvas.addEventListener("pointerdown", () => canvas.focus());
+
+let last = performance.now();
+function frame(now: number) {
+  const dt = Math.min((now - last) / 1000, 1 / 20);
+  last = now;
+  // Cada juego tiene su tamaño: se reajusta el lienzo al cambiar de juego.
+  const size = screen?.size ?? MENU_SIZE;
+  if (size[0] !== fitted[0] || size[1] !== fitted[1]) fit(size);
+  if (screen) {
+    screen.update(dt);
+    screen.draw(ctx, pixelScale);
+  } else {
+    ctx.fillStyle = css(BG_COLOR);
+    ctx.fillRect(0, 0, size[0], size[1]);
+  }
+  requestAnimationFrame(frame);
+}
+
+showMain();
+requestAnimationFrame(frame);

@@ -1,0 +1,10 @@
+src/**
+web/**
+scripts/**
+api/**
+.cache/**
+vercel.json
+MEMORIA.md
+node_modules/**
+tsconfig.json
+.vscode/**
