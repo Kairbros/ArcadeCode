@@ -1,4 +1,4 @@
-# Memoria del proyecto: Arcade (Bomberman, Karts y Sumo de bolas)
+# Memoria del proyecto: Arcade (Bomberman, Karts, Sumo de bolas y Monigotes)
 
 Guía para quien vaya a extender el proyecto (persona o agente). Resume decisiones, contratos, despliegue
 y trampas conocidas. El README cubre el uso; este documento, el porqué y el cómo extender.
@@ -7,7 +7,7 @@ y trampas conocidas. El README cubre el uso; este documento, el porqué y el có
 
 - Hub de juegos multijugador en TypeScript + Canvas 2D. Se juega en el navegador o dentro de VS Code
   (vista "Arcade" en el Explorador). Juegos: **Bomberman**, **Karts** (modo 7) y
-  **Sumo de bolas** (modo 7).
+  **Sumo de bolas** (modo 7) y **Monigotes** (peleas en plataformas).
 - **Pantalla muy pequeña**: se juega sobre todo en la barra lateral de VS Code (~180–300 px de ancho).
   Todo el UI (menú, HUD) debe funcionar ahí. El lienzo escala el tamaño lógico del juego.
 - **Red corporativa**: los equipos de la oficina pueden no verse entre sí. Por eso la conexión es
@@ -60,6 +60,7 @@ src/game/bomberman/        ECS (components, ecs, systems/), mapgen, prefabs, gam
 src/game/karts/            config, track (generador), physics, race (árbitro+IA), input, render (modo 7),
                            kart-sprite (sprites 3D prerenderizados), game (adaptadores)
 src/game/balls/            config, arena (física+IA+árbitro), input, render (modo 7 fijo), game (adaptadores)
+src/game/stick/            config, stages, fight (física+armas+bots+árbitro), input, render (poses por código), game
 ```
 
 ### Contrato de red (lo que un juego debe implementar) — `src/game/net/types.ts`
@@ -73,7 +74,7 @@ src/game/balls/            config, arena (física+IA+árbitro), input, render (m
 - Índices de jugador: 0 = anfitrión, 1..3 invitados (asignados al pulsar "Empezar").
 - **Bots** (`settings.bots`, ajuste `bomberman.bots`, botón del menú): con bots la IA rellena hasta 4 en Karts y
   Sumo; sin ellos solo juegan las personas (solo = contrarreloj / aguantar 60 s). En red vale el del anfitrión
-  (`createHostGame`). Los enemigos de Bomberman no son bots: no les afecta.
+  (`createHostGame`). Los enemigos de Bomberman no son bots: no les afecta. Afecta a Karts, Sumo y Monigotes.
 - **Nombres** (`core/names.ts`): `PLAYER_NAMES` es mutable y los juegos lo leen al dibujar. El nombre se elige en el
   menú (ajuste `bomberman.playerName` o localStorage, máx. 12). El invitado lo manda en `{t:"hello"}` (directo) y
   como campo `nm` en sus mensajes hasta verlo en `snap.n`, la lista que `HostSession.stamp` añade a cada estado.
@@ -143,6 +144,16 @@ src/game/balls/            config, arena (física+IA+árbitro), input, render (m
   embestidas (`{t:"b",x,y,d,s}`) y suaviza posiciones adelantándolas por la velocidad.
 - IA: si su posición prevista se sale, vuelve al centro; si no, se coloca entre el rival y el centro y carga.
   Ajustada con simulación (300 rondas solo IA: mediana ~43 s, ~15 % por tiempo).
+
+## 6c. Monigotes (claves)
+
+- Vista lateral fija 320×200, 3 escenarios (`stages.ts`) con plataformas que se atraviesan desde abajo (↓ para
+  bajar) salvo los suelos `solid`. Último en pie gana; KO por vida o por salir del escenario. 90 s.
+- Sin sprites: monigotes de líneas con poses calculadas (`makePose`); ragdoll simple al morir (giro + rebote).
+- Empuje de los golpes × `KNOCK_SCALE(hp)` (crece al perder vida) con rozamiento del aire al salir despedido.
+  Armas en cajas cada 5 s: espada, pistola (8 balas), bomba (2). Al morir se suelta el arma.
+- Red: anfitrión autoritativo como Sumo; el invitado manda `{t:"f",x,d,j,a,s}` (contadores de salto/ataque).
+- Ajustado con simulación (600 rondas solo bots: mediana ~17 s, ~15 % por tiempo, mezcla de caídas y KO).
 
 ## 7. Trampas conocidas (ya nos pasaron)
 

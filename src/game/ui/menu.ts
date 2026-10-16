@@ -51,8 +51,8 @@ const STYLE = `
 
 const COLORS = ["#50aaff", "#ff5f5f", "#6edc6e", "#ffd246"];
 
-/** Los bots solo existen en Karts y Sumo de bolas. */
-const botsLabel = (on: boolean) => `Bots (Karts y Sumo): ${on ? "Sí" : "No"}`;
+/** Los bots existen en Karts, Sumo de bolas y Monigotes (no en Bomberman). */
+const botsLabel = (on: boolean) => `Bots: ${on ? "Sí" : "No"}`;
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);

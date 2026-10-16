@@ -8,6 +8,8 @@ import { KartsHost } from "./karts/game";
 import { KartsInput } from "./karts/input";
 import { BallsHost } from "./balls/game";
 import { BallsInput } from "./balls/input";
+import { StickHost } from "./stick/game";
+import { StickInput } from "./stick/input";
 import { Keyboard, isTyping } from "./core/keyboard";
 import { GuestSession } from "./net/guest";
 import { HostSession } from "./net/host";
@@ -127,6 +129,15 @@ function startLocal(id: GameId) {
   if (id === "karts") {
     // Un jugador contra la IA; vale WASD o flechas.
     const game = new KartsHost(new KartsInput(keyboard), 0, "local", settings.bots);
+    play({
+      size: game.size, update: (dt) => game.update(dt), draw: (c) => game.draw(c), key: (code) => game.key(code),
+      get finished() { return game.finished; }, switchGame: startLocal,
+    });
+    return;
+  }
+  if (id === "stick") {
+    // Un jugador contra los bots (o solo, si están desactivados).
+    const game = new StickHost(new StickInput(keyboard), 0, "local", settings.bots);
     play({
       size: game.size, update: (dt) => game.update(dt), draw: (c) => game.draw(c), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,

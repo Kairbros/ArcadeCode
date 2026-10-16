@@ -1,9 +1,10 @@
 {
   "name": "bomberman-procedural",
   "displayName": "Arcade",
-  "description": "Hub de juegos multijugador dentro de VS Code: Bomberman, Karts y Sumo de bolas",
-  "version": "0.1.1",
+  "description": "Hub de juegos multijugador dentro de VS Code: Bomberman, Karts, Sumo de bolas y Monigotes",
+  "version": "0.1.3",
   "publisher": "kairbros-dev",
+  "icon": "src/media/icon.png",
   "private": true,
   "type": "module",
   "engines": {
@@ -56,7 +57,7 @@
         "bomberman.bots": {
           "type": "boolean",
           "default": true,
-          "description": "Rellena con bots (IA) los huecos libres en Karts y Sumo de bolas. En red vale el ajuste del anfitrión."
+          "description": "Rellena con bots (IA) los huecos libres en Karts, Sumo de bolas y Monigotes. En red vale el ajuste del anfitrión."
         },
         "bomberman.playerName": {
           "type": "string",
