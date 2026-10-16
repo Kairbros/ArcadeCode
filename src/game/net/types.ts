@@ -12,6 +12,8 @@ export interface NetFrame {
 export interface HostGame {
   readonly size: readonly [number, number];
   netLabel: string;
+  /** La ronda o carrera terminó: se puede cambiar de juego sin cerrar la sala. */
+  readonly finished: boolean;
   update(dt: number): void;
   draw(ctx: CanvasRenderingContext2D, pixelScale: number): void;
   key(code: string): void;

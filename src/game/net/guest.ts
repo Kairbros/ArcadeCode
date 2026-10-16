@@ -1,6 +1,8 @@
 // Invitado: conecta con el anfitrión (WebRTC directo; si la red no lo permite, relé por Vercel),
 // crea el juego que indique el estado recibido y le pasa estados y entradas.
 import { DEFAULT_SIZE } from "../core/config";
+import { setName } from "../core/names";
+import { settings } from "../core/settings";
 import { createGuestGame, isGameId } from "../hub";
 import type { Keyboard } from "../core/keyboard";
 import { TRANSPORT_LABEL, type HostMessage, type Transport } from "./protocol";
@@ -18,6 +20,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 interface SnapEnvelope {
   g: string;
   seq: number;
+  /** Nombres de los jugadores, por índice (los añade la sesión del anfitrión). */
+  n?: unknown[];
 }
 
 export class GuestSession {
@@ -31,9 +35,11 @@ export class GuestSession {
   private closed = false;
   private pc: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
-  private pendingBase: { seq: number } | null = null;
+  /** Última base recibida; se guarda por si llega justo antes de un cambio de juego. */
+  private lastBase: { seq: number } | null = null;
   private pendingSnap: SnapEnvelope | null = null;
   private lastSeq = -1;
+  private nameAcked = false;
   // Relé
   private relayInFlight = 0;
   private relayFailures = 0;
@@ -84,6 +90,8 @@ export class GuestSession {
       return this.startRelay(true);
     }
     this.transport = "p2p";
+    // Por directo el nombre ya aparece en la sala de espera del anfitrión.
+    if (settings.name) channel.send(JSON.stringify({ t: "hello", nm: settings.name }));
     channel.addEventListener("close", () => this.setStatus("lost"));
     pc.addEventListener("connectionstatechange", () => isClosedState(pc) && this.setStatus("lost"));
     this.setStatus("waiting");
@@ -100,7 +108,7 @@ export class GuestSession {
   }
 
   private get baseSeq(): number {
-    return this.game ? this.game.baseSeq : (this.pendingBase?.seq ?? -1);
+    return this.game ? this.game.baseSeq : (this.lastBase?.seq ?? -1);
   }
 
   /** Lanza una sincronización cada 1/RELAY_HZ s, con varias en vuelo para no esperar la latencia. */
@@ -124,7 +132,7 @@ export class GuestSession {
 
   private async relaySync(playing: boolean) {
     try {
-      const m = playing ? this.game?.outgoing("relay") : undefined;
+      const m = playing ? this.withName(this.game?.outgoing("relay")) : undefined;
       const res = await this.signal.guestSync(this.code, this.guestId, this.baseSeq, m as never);
       this.relayFailures = 0;
       if (res.index !== null && this.index < 0) this.index = res.index;
@@ -169,25 +177,33 @@ export class GuestSession {
   }
 
   private handleBase(base: { seq: number }) {
-    if (this.game) this.game.onBase(base);
-    else this.pendingBase = base;
+    this.lastBase = base;
+    this.game?.onBase(base);
+  }
+
+  /** Adjunta el nombre propio hasta que el anfitrión lo reparta en sus estados. */
+  private withName(m: object | undefined): object | undefined {
+    return m && !this.nameAcked && settings.name ? { ...m, nm: settings.name } : m;
   }
 
   private handleSnap(snap: SnapEnvelope) {
     this.lastSeq = snap.seq;
+    if (Array.isArray(snap.n)) {
+      snap.n.forEach((name, i) => setName(i, name));
+      this.nameAcked = !settings.name || snap.n[this.index] === settings.name;
+    }
     this.pendingSnap = snap;
     this.ensureGame();
   }
 
-  /** Crea el juego cuando se conocen el índice y el tipo de juego, y le entrega lo pendiente. */
+  /** Crea el juego cuando se conocen el índice y el tipo de juego (o el anfitrión lo cambia). */
   private ensureGame() {
     const snap = this.pendingSnap;
     if (!snap || this.index < 0 || !isGameId(snap.g)) return;
     if (!this.game || this.game.id !== snap.g) {
       this.game = createGuestGame(snap.g, this.index, this.keyboard);
       this.game.netLabel = this.transport ? `Conexión ${TRANSPORT_LABEL[this.transport]}` : "";
-      if (this.pendingBase) this.game.onBase(this.pendingBase);
-      this.pendingBase = null;
+      if (this.lastBase) this.game.onBase(this.lastBase);
     }
     this.game.onSnap(snap);
     this.pendingSnap = null;
@@ -199,7 +215,7 @@ export class GuestSession {
     if (!game) return;
     game.update(dt);
     if (this.transport === "p2p" && this.channel?.readyState === "open") {
-      const m = game.outgoing("p2p");
+      const m = this.withName(game.outgoing("p2p"));
       if (m) this.channel.send(JSON.stringify(m));
     }
   }

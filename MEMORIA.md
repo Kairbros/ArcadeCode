@@ -1,4 +1,4 @@
-# Memoria del proyecto: Arcade (Bomberman + Karts)
+# Memoria del proyecto: Arcade (Bomberman, Karts y Sumo de bolas)
 
 Guía para quien vaya a extender el proyecto (persona o agente). Resume decisiones, contratos, despliegue
 y trampas conocidas. El README cubre el uso; este documento, el porqué y el cómo extender.
@@ -6,7 +6,8 @@ y trampas conocidas. El README cubre el uso; este documento, el porqué y el có
 ## 1. Qué es y restricciones que guían todo
 
 - Hub de juegos multijugador en TypeScript + Canvas 2D. Se juega en el navegador o dentro de VS Code
-  (vista "Arcade" en el Explorador). Juegos: **Bomberman** y **Karts** (modo 7).
+  (vista "Arcade" en el Explorador). Juegos: **Bomberman**, **Karts** (modo 7) y
+  **Sumo de bolas** (modo 7).
 - **Pantalla muy pequeña**: se juega sobre todo en la barra lateral de VS Code (~180–300 px de ancho).
   Todo el UI (menú, HUD) debe funcionar ahí. El lienzo escala el tamaño lógico del juego.
 - **Red corporativa**: los equipos de la oficina pueden no verse entre sí. Por eso la conexión es
@@ -58,17 +59,29 @@ src/game/bomberman/        ECS (components, ecs, systems/), mapgen, prefabs, gam
                            snapshot (base+deltas), net (adaptadores HostGame/GuestGame)
 src/game/karts/            config, track (generador), physics, race (árbitro+IA), input, render (modo 7),
                            kart-sprite (sprites 3D prerenderizados), game (adaptadores)
+src/game/balls/            config, arena (física+IA+árbitro), input, render (modo 7 fijo), game (adaptadores)
 ```
 
 ### Contrato de red (lo que un juego debe implementar) — `src/game/net/types.ts`
 
-- `HostGame`: `size`, `netLabel`, `update(dt)`, `draw(ctx, scale)`, `key(code)`,
+- `HostGame`: `size`, `netLabel`, `finished` (ronda terminada: permite cambiar de juego), `update(dt)`, `draw(ctx, scale)`, `key(code)`,
   `frame(now) → { snap, base }`, `onMessage(index, msg)`, `onDisconnect(index)`.
 - `GuestGame`: `id`, `size`, `baseSeq`, `ready`, `netLabel`, `onBase(b)`, `onSnap(s)`, `update(dt)`,
   `draw`, `outgoing(transport) → objeto | undefined` (el juego decide el ritmo de envío).
 - `snap` **siempre** lleva `g` (id del juego), `seq` (creciente) y `base` (secuencia de la base,
   `-1` si el juego no usa bases). El invitado crea el juego al ver `snap.g`.
 - Índices de jugador: 0 = anfitrión, 1..3 invitados (asignados al pulsar "Empezar").
+- **Bots** (`settings.bots`, ajuste `bomberman.bots`, botón del menú): con bots la IA rellena hasta 4 en Karts y
+  Sumo; sin ellos solo juegan las personas (solo = contrarreloj / aguantar 60 s). En red vale el del anfitrión
+  (`createHostGame`). Los enemigos de Bomberman no son bots: no les afecta.
+- **Nombres** (`core/names.ts`): `PLAYER_NAMES` es mutable y los juegos lo leen al dibujar. El nombre se elige en el
+  menú (ajuste `bomberman.playerName` o localStorage, máx. 12). El invitado lo manda en `{t:"hello"}` (directo) y
+  como campo `nm` en sus mensajes hasta verlo en `snap.n`, la lista que `HostSession.stamp` añade a cada estado.
+  Por relé el nombre no se ve en la sala de espera, solo al empezar.
+- **Cambio de juego sin cerrar la sala**: al terminar (`finished`), el anfitrión pulsa J y elige otro juego
+  (`HostSession.switchGame`). El invitado lo crea al ver otro `snap.g`. Como cada juego numera `seq` y bases
+  desde 1, `HostSession` les suma un desfase para que sigan creciendo; el invitado guarda la última base
+  (puede llegar justo antes del cambio).
 
 ### Cómo añadir un juego nuevo
 
@@ -79,7 +92,8 @@ src/game/karts/            config, track (generador), physics, race (árbitro+IA
 5. Mensajes invitado→anfitrión: **≤ 300 caracteres en JSON** (límite `MAX_INPUT` del relé) e incluir
    un número de secuencia `s` (por el relé llegan desordenados; el anfitrión descarta los viejos).
 6. Teclas que deban anular el scroll: añadir a `captured` en `main.ts`.
-7. Probar en la barra lateral (tamaño pequeño) y en escala de grises.
+7. Implementar `finished` y mencionar "J: cambiar juego" en la pantalla final.
+8. Probar en la barra lateral (tamaño pequeño) y en escala de grises.
 
 ### Red y relé
 
@@ -117,6 +131,18 @@ src/game/karts/            config, track (generador), physics, race (árbitro+IA
   (`race.ts`) arbitra cajas, golpes (`spinSeq`), objetos y llegada. Turbo se aplica al instante en el invitado.
 - IA: sigue la línea central con desvío propio y frena según el giro de los próximos ~150 u (`cornerSpeed`).
 - Sprites de kart (`kart-sprite.ts`): ~20 cajas 3D + casco, 32 vistas por color, cacheadas, escaladas sin suavizado.
+
+## 6b. Sumo de bolas (claves)
+
+- Arena circular sobre lava; gana el último en pie (empate si caen a la vez o se acaba el tiempo, 60 s).
+  Desde los 20 s la plataforma encoge (100 → 45). Victorias acumuladas entre rondas (R).
+- Modo 7 con **cámara fija** al sur, alta, mirando al norte (sigue un poco al jugador de lado). Cada píxel
+  se proyecta en dos planos (plataforma y lava, `LAVA_DROP` más abajo): fuera de la plataforma pero dentro
+  del círculo en la lava = pared del cilindro. Lava: ruido 128×128 con paleta cíclica.
+- Red: **anfitrión autoritativo** (choques entre bolas); el invitado manda dirección + contador de
+  embestidas (`{t:"b",x,y,d,s}`) y suaviza posiciones adelantándolas por la velocidad.
+- IA: si su posición prevista se sale, vuelve al centro; si no, se coloca entre el rival y el centro y carga.
+  Ajustada con simulación (300 rondas solo IA: mediana ~43 s, ~15 % por tiempo).
 
 ## 7. Trampas conocidas (ya nos pasaron)
 

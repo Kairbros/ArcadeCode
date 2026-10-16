@@ -6,9 +6,27 @@ interface VsCodeApi {
 }
 declare function acquireVsCodeApi(): VsCodeApi;
 
-const injected = (window as { BOMBERMAN_CONFIG?: { grayscale?: boolean } }).BOMBERMAN_CONFIG;
+const injected = (window as { BOMBERMAN_CONFIG?: { grayscale?: boolean; playerName?: string; bots?: boolean } })
+  .BOMBERMAN_CONFIG;
 const vscodeApi: VsCodeApi | null = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null;
 const STORAGE_KEY = "bomberman.grayscale";
+const NAME_KEY = "bomberman.playerName";
+const BOTS_KEY = "bomberman.bots";
+export const MAX_NAME = 12;
+
+/** Nombre de jugador seguro: sin caracteres de control y como mucho MAX_NAME caracteres. */
+export function cleanName(raw: unknown): string {
+  return typeof raw === "string" ? raw.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, MAX_NAME) : "";
+}
+
+function loadName(): string {
+  if (injected?.playerName !== undefined) return cleanName(injected.playerName);
+  try {
+    return cleanName(localStorage.getItem(NAME_KEY));
+  } catch {
+    return "";
+  }
+}
 
 function loadGrayscale(): boolean {
   if (injected?.grayscale !== undefined) return injected.grayscale;
@@ -19,7 +37,46 @@ function loadGrayscale(): boolean {
   }
 }
 
-export const settings = { grayscale: loadGrayscale() };
+function loadBots(): boolean {
+  if (injected?.bots !== undefined) return injected.bots;
+  try {
+    return localStorage.getItem(BOTS_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export const settings = { grayscale: loadGrayscale(), name: loadName(), bots: loadBots() };
+
+/** Bots (IA) que rellenan los huecos en Karts y Sumo de bolas. En red vale el ajuste del anfitrión. */
+export function setBots(on: boolean) {
+  settings.bots = on;
+  if (vscodeApi) {
+    vscodeApi.postMessage({ type: "setBots", value: on });
+  } else {
+    try {
+      localStorage.setItem(BOTS_KEY, on ? "1" : "0");
+    } catch {
+      // sin almacenamiento: solo dura esta sesión
+    }
+  }
+}
+
+/** Guarda el nombre elegido (vacío = el nombre por defecto, "Jugador N"). */
+export function setPlayerName(raw: string) {
+  const name = cleanName(raw);
+  if (name === settings.name) return;
+  settings.name = name;
+  if (vscodeApi) {
+    vscodeApi.postMessage({ type: "setPlayerName", value: name });
+  } else {
+    try {
+      localStorage.setItem(NAME_KEY, name);
+    } catch {
+      // sin almacenamiento: solo dura esta sesión
+    }
+  }
+}
 const listeners: (() => void)[] = [];
 
 export function onSettingsChange(fn: () => void) {

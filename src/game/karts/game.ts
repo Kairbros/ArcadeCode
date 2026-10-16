@@ -38,16 +38,22 @@ export class KartsHost implements HostGame {
   private readonly renderer = new Mode7Renderer();
   private kinds: SlotKind[];
 
-  constructor(private hostInput: DriveSource, remoteCount: number, private mode: "local" | "host") {
+  constructor(
+    private hostInput: DriveSource, remoteCount: number, private mode: "local" | "host", private bots = true,
+  ) {
     this.kinds = ["local", ...Array<SlotKind>(remoteCount).fill("remote")];
-    this.race = new Race(newSeed(), this.kinds, hostInput);
+    this.race = new Race(newSeed(), this.kinds, hostInput, bots);
   }
 
   private newRace() {
     // Quien se desconectó sigue siendo IA en la siguiente carrera.
     this.kinds = this.race.slots.map((s) => s.kind);
-    this.race = new Race(newSeed(), this.kinds, this.hostInput);
+    this.race = new Race(newSeed(), this.kinds, this.hostInput, this.bots);
     this.renderer.reset();
+  }
+
+  get finished() {
+    return this.race.phase === 2;
   }
 
   update(dt: number) {
@@ -78,7 +84,7 @@ export class KartsHost implements HostGame {
       results: race.phase === 2 ? standings(race) : null,
       aiSlots: race.slots.map((s) => s.kind === "ai"),
       netLabel: this.netLabel,
-      footer: race.phase === 2 ? "R: nueva carrera · Esc: menú" : race.time < 6 ? HINT : "",
+      footer: race.phase === 2 ? "R: nueva carrera · J: cambiar juego · Esc: menú" : race.time < 6 ? HINT : "",
     };
     this.renderer.draw(ctx, view);
   }

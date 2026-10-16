@@ -59,9 +59,10 @@ export class Race {
   private firstFinishAt = -1;
   private remoteSeq: number[] = [];
 
-  constructor(readonly seed: number, kinds: SlotKind[], private localInput: DriveSource | null) {
+  /** Con bots, la IA rellena hasta RACERS; sin ellos corren solo los de kinds. */
+  constructor(readonly seed: number, kinds: SlotKind[], private localInput: DriveSource | null, bots = true) {
     this.track = generateTrack(seed);
-    this.slots = Array.from({ length: RACERS }, (_, i) => {
+    this.slots = Array.from({ length: bots ? RACERS : Math.max(1, kinds.length) }, (_, i) => {
       const kind = kinds[i] ?? "ai";
       return {
         index: i, kind, kart: makeKart(this.track.grid[i]), item: ITEM_NONE, spinSeq: 0, place: 0, finishTime: 0,
@@ -175,7 +176,7 @@ export class Race {
 
   /** Los de atrás reciben objetos más útiles para remontar. */
   private randomItem(s: Slot): ItemKind {
-    const behind = (this.rankOf(s.index) - 1) / (RACERS - 1); // 0 = primero, 1 = último
+    const behind = (this.rankOf(s.index) - 1) / Math.max(1, this.slots.length - 1); // 0 = primero, 1 = último
     const turbo = 0.15 + behind * 0.4;
     const shell = 0.3 + behind * 0.1;
     const r = Math.random();

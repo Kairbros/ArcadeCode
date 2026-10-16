@@ -1,6 +1,7 @@
 // Menú HTML superpuesto al lienzo: elegir juego, crear sala, unirse, sala de espera.
 // Pensado para la barra lateral de VS Code: se adapta a anchos y altos muy pequeños.
 import { GAMES, type GameId } from "../hub";
+import { MAX_NAME } from "../core/settings";
 
 const STYLE = `
 .bm-gray canvas, .bm-gray .bm-menu { filter: grayscale(1); }
@@ -25,6 +26,7 @@ const STYLE = `
 .bm-row input { flex: 1; min-width: 0; font: bold clamp(14px, 5vw, 18px) Arial, sans-serif; text-transform: uppercase;
   letter-spacing: 3px; text-align: center; padding: clamp(5px, 2vw, 8px); border-radius: 7px;
   border: 1px solid #46465f; background: #12121a; color: #fff; }
+.bm-row input.bm-name { text-transform: none; letter-spacing: 0; font-size: clamp(12px, 4vw, 15px); }
 .bm-sep { border: 0; border-top: 1px solid #34344a; margin: 0; width: 100%; }
 .bm-code { font: bold clamp(24px, 13vw, 42px) monospace; letter-spacing: 0.2em; color: #ffcf50; }
 .bm-players { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; text-align: left; }
@@ -49,6 +51,9 @@ const STYLE = `
 
 const COLORS = ["#50aaff", "#ff5f5f", "#6edc6e", "#ffd246"];
 
+/** Los bots solo existen en Karts y Sumo de bolas. */
+const botsLabel = (on: boolean) => `Bots (Karts y Sumo): ${on ? "Sí" : "No"}`;
+
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
@@ -58,6 +63,9 @@ export interface MainHandlers {
   host(): void;
   join(code: string): void;
   toggleGray(): void;
+  rename(name: string): void;
+  /** Cambia los bots y devuelve el nuevo valor. */
+  toggleBots(): boolean;
 }
 
 export class Menu {
@@ -88,10 +96,14 @@ export class Menu {
   }
 
   /** onlineError: si no es null, el modo en red está desactivado y se explica el motivo. */
-  showMain(h: MainHandlers, onlineError: string | null, gray: boolean, lastError = "") {
+  showMain(h: MainHandlers, onlineError: string | null, gray: boolean, name: string, bots: boolean, lastError = "") {
     const off = onlineError !== null;
     const card = this.render(`
       <h1>ARCADE</h1>
+      <div class="bm-row">
+        <input data-a="name" class="bm-name" maxlength="${MAX_NAME}" placeholder="Tu nombre" aria-label="Tu nombre"
+          autocomplete="off" spellcheck="false" value="${esc(name)}">
+      </div>
       <button data-a="local">Jugar en este equipo</button>
       <hr class="bm-sep">
       <p class="bm-optional">En red (hasta 4)</p>
@@ -103,10 +115,14 @@ export class Menu {
       ${off ? `<p>${esc(onlineError)}</p>` : ""}
       ${lastError ? `<p class="bm-error">${esc(lastError)}</p>` : ""}
       <hr class="bm-sep">
+      <button data-a="bots" class="bm-secondary bm-small" aria-pressed="${bots}">${botsLabel(bots)}</button>
       <button data-a="gray" class="bm-secondary bm-small" aria-pressed="${gray}">Escala de grises: ${gray ? "Sí" : "No"}</button>
       <p class="bm-optional">Tecla G en partida · Esc vuelve al menú</p>
     `);
-    const input = card.querySelector("input")!;
+    const nameInput = card.querySelector<HTMLInputElement>('[data-a="name"]')!;
+    // "change" salta al salir del campo (también al pulsar un botón): se guarda una vez, no por tecla.
+    nameInput.addEventListener("change", () => h.rename(nameInput.value));
+    const input = card.querySelector<HTMLInputElement>('input:not([data-a="name"])')!;
     const join = () => {
       const code = input.value.trim().toUpperCase();
       if (code.length === 4) h.join(code);
@@ -116,6 +132,12 @@ export class Menu {
     card.querySelector<HTMLButtonElement>('[data-a="host"]')!.onclick = () => h.host();
     card.querySelector<HTMLButtonElement>('[data-a="join"]')!.onclick = join;
     card.querySelector<HTMLButtonElement>('[data-a="gray"]')!.onclick = () => h.toggleGray();
+    const botsBtn = card.querySelector<HTMLButtonElement>('[data-a="bots"]')!;
+    botsBtn.onclick = () => {
+      const on = h.toggleBots();
+      botsBtn.textContent = botsLabel(on);
+      botsBtn.setAttribute("aria-pressed", String(on));
+    };
     // Ojo: un manejador on* que devuelve false cancela la tecla; por eso no se devuelve nada.
     input.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") join();

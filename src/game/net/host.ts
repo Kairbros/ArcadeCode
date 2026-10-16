@@ -1,6 +1,8 @@
 // Anfitrión: abre sala, acepta invitados (WebRTC directo o relé por Vercel), ejecuta el juego
 // elegido y reparte su estado. No sabe de qué juego se trata: eso lo aporta un HostGame.
-import { MAX_PLAYERS, SNAPSHOT_HZ } from "../core/config";
+import { MAX_PLAYERS, PLAYER_NAMES, SNAPSHOT_HZ } from "../core/config";
+import { myName, resetNames, setName } from "../core/names";
+import { cleanName } from "../core/settings";
 import { createHostGame, type GameId } from "../hub";
 import type { Keyboard } from "../core/keyboard";
 import { TRANSPORT_LABEL, type HostMessage, type Transport } from "./protocol";
@@ -21,6 +23,8 @@ export interface Peer {
   connected: boolean;
   sentBase: number; // última base enviada por canal directo
   lastSeen: number; // última entrada recibida por relé
+  /** Nombre que eligió el invitado ("" hasta que lo envíe). */
+  name: string;
 }
 
 const MAX_BUFFERED = 256 * 1024; // si un invitado va lento, se saltan envíos en vez de acumular
@@ -43,8 +47,15 @@ export class HostSession {
   private relayBaseSent = -1;
   private relayFailures = 0;
   private pendingWelcomes: Record<string, number> = {};
+  private keyboard: Keyboard | null = null;
+  // Cada juego numera sus estados y bases desde 1: al cambiar de juego se suma un desfase para que
+  // los invitados (que descartan secuencias viejas) acepten los del juego nuevo.
+  private seqOffset = 0;
+  private baseOffset = 0;
+  private lastSeq = 0;
+  private lastBase = 0;
 
-  constructor(private signal: SignalClient, readonly gameId: GameId) {}
+  constructor(private signal: SignalClient, public gameId: GameId) {}
 
   async open() {
     ({ code: this.code, hostKey: this.hostKey } = await this.signal.create());
@@ -79,7 +90,7 @@ export class HostSession {
   private addPeer(guestId: string, transport: Transport, pc: RTCPeerConnection | null): Peer {
     const peer: Peer = {
       guestId, transport, pc, channel: null, index: 0,
-      ready: transport === "relay", connected: true, sentBase: -1, lastSeen: performance.now(),
+      ready: transport === "relay", connected: true, sentBase: -1, lastSeen: performance.now(), name: "",
     };
     this.peers.push(peer);
     return peer;
@@ -95,6 +106,14 @@ export class HostSession {
   }
 
   private receive(peer: Peer, msg: unknown) {
+    // El invitado adjunta su nombre (campo nm) hasta ver que el anfitrión lo reparte.
+    const nm = cleanName((msg as { nm?: unknown } | null)?.nm);
+    if (nm && nm !== peer.name) {
+      peer.name = nm;
+      if (peer.index) setName(peer.index, nm);
+      this.onChange();
+    }
+    if ((msg as { t?: unknown } | null)?.t === "hello") return;
     if (this.game && peer.index && peer.connected) this.game.onMessage(peer.index, msg);
   }
 
@@ -146,14 +165,43 @@ export class HostSession {
     const players = this.readyPeers;
     for (const p of this.peers) if (!players.includes(p)) p.pc?.close();
     this.peers = players;
+    resetNames();
+    setName(0, myName(0));
     players.forEach((p, i) => {
       p.index = i + 1;
+      setName(p.index, p.name);
       p.lastSeen = performance.now();
       if (p.transport === "p2p") this.send(p, { t: "welcome", index: p.index });
       else this.pendingWelcomes[p.guestId] = p.index;
     });
-    this.game = createHostGame(this.gameId, keyboard, players.length);
+    this.keyboard = keyboard;
+    this.switchGame(this.gameId);
+  }
+
+  /** Arranca otro juego con los mismos jugadores, sin cerrar la sala. */
+  switchGame(id: GameId) {
+    if (!this.keyboard) return;
+    this.gameId = id;
+    this.seqOffset = this.lastSeq;
+    this.baseOffset = this.lastBase;
+    this.lastFrame = null;
+    const game = createHostGame(id, this.keyboard, this.peers.length);
+    // Quien se fue sigue fuera en el juego nuevo.
+    for (const p of this.peers) if (!p.connected) game.onDisconnect(p.index);
+    this.game = game;
     this.updateLabel();
+  }
+
+  /** Aplica el desfase de secuencias del juego actual. */
+  private stamp({ snap, base }: NetFrame): NetFrame {
+    const out = {
+      ...snap, seq: snap.seq + this.seqOffset, base: snap.base < 0 ? snap.base : snap.base + this.baseOffset,
+      n: PLAYER_NAMES.slice(0, this.peers.length + 1), // nombres de todos los jugadores
+    };
+    const b = base && { ...base, seq: base.seq + this.baseOffset };
+    this.lastSeq = out.seq;
+    if (b) this.lastBase = Math.max(this.lastBase, b.seq);
+    return { snap: out, base: b };
   }
 
   private updateLabel() {
@@ -173,7 +221,7 @@ export class HostSession {
     this.snapTimer += dt;
     if (this.snapTimer >= 1 / SNAPSHOT_HZ) {
       this.snapTimer = 0;
-      this.lastFrame = game.frame(performance.now());
+      this.lastFrame = this.stamp(game.frame(performance.now()));
       this.sendDirect(this.lastFrame);
     }
 

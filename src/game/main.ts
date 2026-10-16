@@ -6,13 +6,16 @@ import { gameName, type GameId } from "./hub";
 import { LocalController } from "./bomberman/input";
 import { KartsHost } from "./karts/game";
 import { KartsInput } from "./karts/input";
+import { BallsHost } from "./balls/game";
+import { BallsInput } from "./balls/input";
 import { Keyboard, isTyping } from "./core/keyboard";
 import { GuestSession } from "./net/guest";
 import { HostSession } from "./net/host";
 import { TRANSPORT_LABEL } from "./net/protocol";
 import { SignalClient } from "./net/signaling";
 import { css } from "./core/draw";
-import { onSettingsChange, setGrayscale, settings } from "./core/settings";
+import { onSettingsChange, setBots, setGrayscale, setPlayerName, settings } from "./core/settings";
+import { defaultName, myName, resetNames, setName } from "./core/names";
 import { Menu } from "./ui/menu";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -48,27 +51,41 @@ interface Screen {
   update(dt: number): void;
   draw(ctx: CanvasRenderingContext2D, pixelScale: number): void;
   key?(code: string): void;
+  /** Partida terminada: con J se puede cambiar de juego (solo local y anfitrión). */
+  readonly finished?: boolean;
+  switchGame?(id: GameId): void;
 }
 const MENU_SIZE = DEFAULT_SIZE;
 const BOMBER_SIZE = [SCREEN_W, SCREEN_H] as const;
 let screen: Screen | null = null;
 let host: HostSession | null = null;
 let guest: GuestSession | null = null;
+/** El selector de "Cambiar de juego" está abierto sobre la partida. */
+let switching = false;
 
 function showMain(error = "") {
   host?.close();
   guest?.close();
   host = guest = null;
   screen = null;
+  switching = false;
+  resetNames();
   menu.showMain(
     {
       local: () => menu.showPicker("Jugar en este equipo", startLocal, () => showMain()),
       host: () => menu.showPicker("¿A qué jugáis?", startHost, () => showMain()),
       join: startJoin,
       toggleGray,
+      rename: setPlayerName,
+      toggleBots: () => {
+        setBots(!settings.bots);
+        return settings.bots;
+      },
     },
     onlineError,
     settings.grayscale,
+    settings.name,
+    settings.bots,
     error,
   );
 }
@@ -87,15 +104,42 @@ onSettingsChange(() => {
 
 function play(s: Screen) {
   screen = s;
+  resume();
+}
+
+function resume() {
+  switching = false;
   menu.hide();
   canvas.focus();
 }
 
+/** Selector de juego sobre la partida terminada; la sala (si la hay) sigue abierta. */
+function showSwitch(s: Screen) {
+  switching = true;
+  menu.showPicker("Cambiar de juego", (id) => {
+    s.switchGame!(id);
+    resume();
+  }, resume);
+}
+
 function startLocal(id: GameId) {
+  setName(0, myName(0));
   if (id === "karts") {
     // Un jugador contra la IA; vale WASD o flechas.
-    const game = new KartsHost(new KartsInput(keyboard), 0, "local");
-    play({ size: game.size, update: (dt) => game.update(dt), draw: (c) => game.draw(c), key: (code) => game.key(code) });
+    const game = new KartsHost(new KartsInput(keyboard), 0, "local", settings.bots);
+    play({
+      size: game.size, update: (dt) => game.update(dt), draw: (c) => game.draw(c), key: (code) => game.key(code),
+      get finished() { return game.finished; }, switchGame: startLocal,
+    });
+    return;
+  }
+  if (id === "balls") {
+    // Un jugador contra tres bolas de la IA.
+    const game = new BallsHost(new BallsInput(keyboard), 0, "local", settings.bots);
+    play({
+      size: game.size, update: (dt) => game.update(dt), draw: (c) => game.draw(c), key: (code) => game.key(code),
+      get finished() { return game.finished; }, switchGame: startLocal,
+    });
     return;
   }
   const params = new URLSearchParams(location.search);
@@ -103,7 +147,10 @@ function startLocal(id: GameId) {
   const seed = Number(params.get("seed")) || undefined;
   const sources = PLAYER_CONTROLS.map((scheme) => new LocalController(keyboard, scheme));
   const game = new Game(sources, players, seed, "local");
-  play({ size: BOMBER_SIZE, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.handleKey(code) });
+  play({
+    size: BOMBER_SIZE, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.handleKey(code),
+    get finished() { return game.over; }, switchGame: startLocal,
+  });
 }
 
 async function startHost(id: GameId) {
@@ -114,15 +161,22 @@ async function startHost(id: GameId) {
   const refresh = () => {
     if (host !== session || session.game) return;
     const names = [
-      "Jugador 1 (tú, anfitrión)",
-      ...session.readyPeers.map((p, i) => `Jugador ${i + 2} · ${TRANSPORT_LABEL[p.transport]}`),
+      `${myName(0)} (tú, anfitrión)`,
+      ...session.readyPeers.map((p, i) => `${p.name || defaultName(i + 1)} · ${TRANSPORT_LABEL[p.transport]}`),
     ];
     menu.showLobby(session.code, gameName(id), names, start, () => showMain());
   };
   const start = () => {
     session.start(keyboard);
-    const game = session.game!;
-    play({ size: game.size, update: (dt) => session.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code) });
+    // session.game cambia al cambiar de juego: se consulta en cada uso.
+    play({
+      get size() { return session.game!.size; },
+      update: (dt) => session.update(dt),
+      draw: (c, s) => session.game!.draw(c, s),
+      key: (code) => session.game!.key(code),
+      get finished() { return session.game!.finished; },
+      switchGame: (next) => session.switchGame(next),
+    });
   };
   session.onChange = refresh;
   session.onError = (msg) => host === session && !session.game && showMain(msg);
@@ -175,8 +229,10 @@ async function startJoin(code: string) {
 
 window.addEventListener("keydown", (ev) => {
   if (ev.repeat || isTyping(ev)) return;
-  if (ev.code === "Escape" && screen) showMain();
+  if (ev.code === "Escape" && switching) resume();
+  else if (ev.code === "Escape" && screen) showMain();
   else if (ev.code === "KeyG") toggleGray();
+  else if (ev.code === "KeyJ" && !menu.visible && screen?.switchGame && screen.finished) showSwitch(screen);
   else if (!menu.visible) screen?.key?.(ev.code);
 });
 

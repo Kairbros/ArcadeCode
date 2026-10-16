@@ -35,6 +35,10 @@ export class BombermanHost implements HostGame {
     this.game.netLabel = v;
   }
 
+  get finished() {
+    return this.game.over;
+  }
+
   update(dt: number) {
     this.game.update(dt);
   }

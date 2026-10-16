@@ -1,7 +1,7 @@
 // Simulación: crea el mundo desde el mapa procedural y ejecuta los sistemas.
 // La usan el modo local y el anfitrión en red (el invitado solo dibuja snapshots).
 import { Player } from "./components";
-import { COLS, PLAYER_COLORS, ROUND_END_DELAY, ROWS, enemiesFor, type RGB } from "./config";
+import { COLS, PLAYER_COLORS, PLAYER_NAMES, ROUND_END_DELAY, ROWS, enemiesFor, type RGB } from "./config";
 import { World, type Entity, type System } from "./ecs";
 import { SpatialIndex } from "./grid";
 import type { IntentSource } from "./input";
@@ -27,8 +27,8 @@ const HINTS: Record<GameMode, string> = {
   host: "Muévete con WASD o FLECHAS · Bomba: ESPACIO o ENTER   |   R nuevo mapa · P pausa",
 };
 const OVER_SUBTITLES: Record<GameMode, string> = {
-  local: "R: nuevo mapa  ·  T: repetir mapa  ·  1/2: jugadores",
-  host: "R: nuevo mapa  ·  T: repetir mapa",
+  local: "R: nuevo mapa  ·  T: repetir mapa  ·  1/2: jugadores  ·  J: cambiar juego",
+  host: "R: nuevo mapa  ·  T: repetir mapa  ·  J: cambiar juego",
 };
 
 export class Game {
@@ -140,7 +140,7 @@ export class Game {
     const alive = this.alivePlayers();
     if (this.nPlayers === 1) return alive.length ? ["¡VICTORIA!", [255, 220, 80]] : ["GAME OVER", [255, 80, 80]];
     if (!alive.length) return ["¡EMPATE!", [235, 235, 245]];
-    return [`¡GANA ${alive[0].name.toUpperCase()}!`, PLAYER_COLORS[alive[0].index]];
+    return [`¡GANA ${(PLAYER_NAMES[alive[0].index] ?? alive[0].name).toUpperCase()}!`, PLAYER_COLORS[alive[0].index]];
   }
 
   get view(): GameView {

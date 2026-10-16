@@ -33,15 +33,26 @@ function setupWebview(webview: vscode.Webview, extensionUri: vscode.Uri): vscode
   const distUri = vscode.Uri.joinPath(extensionUri, "dist");
   webview.options = { enableScripts: true, localResourceRoots: [distUri] };
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distUri, "game.js"));
-  webview.html = renderHtml(webview, scriptUri, readServerUrl(), readGrayscale());
-  // El juego pide guardar la preferencia de escala de grises en los ajustes del usuario.
+  webview.html = renderHtml(webview, scriptUri, readServerUrl(), readGrayscale(), readPlayerName(), readBots());
+  // El juego pide guardar sus preferencias (escala de grises, nombre) en los ajustes del usuario.
   return webview.onDidReceiveMessage((msg: { type?: string; value?: unknown }) => {
+    const config = vscode.workspace.getConfiguration("bomberman");
     if (msg?.type === "setGrayscale" && typeof msg.value === "boolean" && msg.value !== readGrayscale()) {
-      void vscode.workspace
-        .getConfiguration("bomberman")
-        .update("grayscale", msg.value, vscode.ConfigurationTarget.Global);
+      void config.update("grayscale", msg.value, vscode.ConfigurationTarget.Global);
+    } else if (msg?.type === "setBots" && typeof msg.value === "boolean" && msg.value !== readBots()) {
+      void config.update("bots", msg.value, vscode.ConfigurationTarget.Global);
+    } else if (msg?.type === "setPlayerName" && typeof msg.value === "string" && msg.value !== readPlayerName()) {
+      void config.update("playerName", msg.value.slice(0, 12), vscode.ConfigurationTarget.Global);
     }
   });
+}
+
+function readBots(): boolean {
+  return vscode.workspace.getConfiguration("bomberman").get<boolean>("bots", true);
+}
+
+function readPlayerName(): string {
+  return vscode.workspace.getConfiguration("bomberman").get<string>("playerName", "");
 }
 
 function readGrayscale(): boolean {
@@ -118,7 +129,10 @@ function readServerUrl(): string {
   }
 }
 
-function renderHtml(webview: vscode.Webview, scriptUri: vscode.Uri, serverUrl: string, grayscale: boolean): string {
+function renderHtml(
+  webview: vscode.Webview, scriptUri: vscode.Uri, serverUrl: string, grayscale: boolean, playerName: string,
+  bots: boolean,
+): string {
   const nonce = makeNonce();
   const csp = [
     "default-src 'none'",
@@ -129,7 +143,7 @@ function renderHtml(webview: vscode.Webview, scriptUri: vscode.Uri, serverUrl: s
   ]
     .filter(Boolean)
     .join("; ");
-  const config = JSON.stringify({ serverUrl, grayscale }).replace(/</g, "\\u003c");
+  const config = JSON.stringify({ serverUrl, grayscale, playerName, bots }).replace(/</g, "\\u003c");
   return `<!doctype html>
 <html lang="es">
 <head>

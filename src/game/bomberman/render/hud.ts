@@ -1,6 +1,6 @@
 import { BombBag, Movement, Player, PowerUpKind } from "../components";
 import {
-  HUD_BG, HUD_HEIGHT, HUD_LINE, PLAYER_BASE_SPEED, PLAYER_COLORS, PLAYER_SPEED_STEP, SCREEN_H, SCREEN_W,
+  HUD_BG, HUD_HEIGHT, HUD_LINE, PLAYER_BASE_SPEED, PLAYER_COLORS, PLAYER_NAMES, PLAYER_SPEED_STEP, SCREEN_H, SCREEN_W,
   TEXT_COLOR, TEXT_DIM, type RGB,
 } from "../config";
 import type { Entity, World } from "../ecs";
@@ -45,7 +45,8 @@ export class Hud {
     const player = world.get(e, Player);
     const mov = world.get(e, Movement);
     const bag = world.get(e, BombBag);
-    const name = (player?.name ?? `Jugador ${i + 1}`) + (isLocal ? " (tú)" : "");
+    // El nombre se lee al dibujar: en red puede llegar después de empezar la ronda.
+    const name = (PLAYER_NAMES[i] ?? player?.name ?? `Jugador ${i + 1}`) + (isLocal ? " (tú)" : "");
     text(ctx, name, x + layout.statX, layout.nameY, color, layout.nameFont);
     if (!player || !player.alive || !mov || !bag) {
       text(ctx, "K.O.", x + layout.statX, layout.statY, [255, 80, 80], layout.statFont);
