@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
-const VIEW_ID = "bomberman.view";
+const SECTION = "arcade"; // prefijo de la vista, el comando y los ajustes en package.json
+const VIEW_ID = `${SECTION}.view`;
 
 export function activate(context: vscode.ExtensionContext) {
   const provider = new SidebarProvider(context.extensionUri);
@@ -10,15 +11,15 @@ export function activate(context: vscode.ExtensionContext) {
       webviewOptions: { retainContextWhenHidden: true },
     }),
     // Pestaña grande en el editor.
-    vscode.commands.registerCommand("bomberman.play", () => GamePanel.show(context.extensionUri)),
+    vscode.commands.registerCommand(`${SECTION}.play`, () => GamePanel.show(context.extensionUri)),
     vscode.workspace.onDidChangeConfiguration((e) => {
       // Si cambia la URL del servidor, se recarga el juego con la nueva.
-      if (e.affectsConfiguration("bomberman.serverUrl")) {
+      if (e.affectsConfiguration(`${SECTION}.serverUrl`)) {
         provider.refresh();
         GamePanel.refresh();
       }
       // La escala de grises se aplica en caliente, sin recargar la partida.
-      if (e.affectsConfiguration("bomberman.grayscale")) {
+      if (e.affectsConfiguration(`${SECTION}.grayscale`)) {
         const msg = { type: "grayscale", value: readGrayscale() };
         provider.post(msg);
         GamePanel.post(msg);
@@ -33,30 +34,36 @@ function setupWebview(webview: vscode.Webview, extensionUri: vscode.Uri): vscode
   const distUri = vscode.Uri.joinPath(extensionUri, "dist");
   webview.options = { enableScripts: true, localResourceRoots: [distUri] };
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distUri, "game.js"));
-  webview.html = renderHtml(webview, scriptUri, readServerUrl(), readGrayscale(), readPlayerName(), readBots());
+  webview.html = renderHtml(webview, scriptUri, readServerUrl(), readGrayscale(), readPlayerName(), readBots(), readCrt());
   // El juego pide guardar sus preferencias (escala de grises, nombre) en los ajustes del usuario.
   return webview.onDidReceiveMessage((msg: { type?: string; value?: unknown }) => {
-    const config = vscode.workspace.getConfiguration("bomberman");
+    const config = vscode.workspace.getConfiguration(SECTION);
     if (msg?.type === "setGrayscale" && typeof msg.value === "boolean" && msg.value !== readGrayscale()) {
       void config.update("grayscale", msg.value, vscode.ConfigurationTarget.Global);
     } else if (msg?.type === "setBots" && typeof msg.value === "boolean" && msg.value !== readBots()) {
       void config.update("bots", msg.value, vscode.ConfigurationTarget.Global);
+    } else if (msg?.type === "setCrt" && typeof msg.value === "boolean" && msg.value !== readCrt()) {
+      void config.update("crt", msg.value, vscode.ConfigurationTarget.Global);
     } else if (msg?.type === "setPlayerName" && typeof msg.value === "string" && msg.value !== readPlayerName()) {
       void config.update("playerName", msg.value.slice(0, 12), vscode.ConfigurationTarget.Global);
     }
   });
 }
 
+function readCrt(): boolean {
+  return vscode.workspace.getConfiguration(SECTION).get<boolean>("crt", true);
+}
+
 function readBots(): boolean {
-  return vscode.workspace.getConfiguration("bomberman").get<boolean>("bots", true);
+  return vscode.workspace.getConfiguration(SECTION).get<boolean>("bots", true);
 }
 
 function readPlayerName(): string {
-  return vscode.workspace.getConfiguration("bomberman").get<string>("playerName", "");
+  return vscode.workspace.getConfiguration(SECTION).get<string>("playerName", "");
 }
 
 function readGrayscale(): boolean {
-  return vscode.workspace.getConfiguration("bomberman").get<boolean>("grayscale", false);
+  return vscode.workspace.getConfiguration(SECTION).get<boolean>("grayscale", false);
 }
 
 class SidebarProvider implements vscode.WebviewViewProvider {
@@ -96,7 +103,7 @@ class GamePanel {
       GamePanel.current.reveal();
       return;
     }
-    const panel = vscode.window.createWebviewPanel("bomberman", "Arcade", vscode.ViewColumn.Active, {
+    const panel = vscode.window.createWebviewPanel(SECTION, "Arcade", vscode.ViewColumn.Active, {
       retainContextWhenHidden: true,
     });
     GamePanel.listener = setupWebview(panel.webview, extensionUri);
@@ -120,7 +127,7 @@ class GamePanel {
 
 /** URL del servidor de emparejamiento (Vercel o local). Vacía si no es una URL http(s) válida. */
 function readServerUrl(): string {
-  const raw = vscode.workspace.getConfiguration("bomberman").get<string>("serverUrl", "").trim();
+  const raw = vscode.workspace.getConfiguration(SECTION).get<string>("serverUrl", "").trim();
   try {
     const url = new URL(raw);
     return url.protocol === "https:" || url.protocol === "http:" ? url.origin : "";
@@ -131,7 +138,7 @@ function readServerUrl(): string {
 
 function renderHtml(
   webview: vscode.Webview, scriptUri: vscode.Uri, serverUrl: string, grayscale: boolean, playerName: string,
-  bots: boolean,
+  bots: boolean, crt: boolean,
 ): string {
   const nonce = makeNonce();
   const csp = [
@@ -143,7 +150,7 @@ function renderHtml(
   ]
     .filter(Boolean)
     .join("; ");
-  const config = JSON.stringify({ serverUrl, grayscale, playerName, bots }).replace(/</g, "\\u003c");
+  const config = JSON.stringify({ serverUrl, grayscale, playerName, bots, crt }).replace(/</g, "\\u003c");
   return `<!doctype html>
 <html lang="es">
 <head>
@@ -158,7 +165,7 @@ function renderHtml(
 </head>
 <body>
   <canvas id="game" tabindex="0"></canvas>
-  <script nonce="${nonce}">window.BOMBERMAN_CONFIG = ${config};</script>
+  <script nonce="${nonce}">window.ARCADE_CONFIG = ${config};</script>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;

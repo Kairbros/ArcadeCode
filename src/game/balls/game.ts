@@ -58,7 +58,7 @@ export class BallsHost implements HostGame {
     if (code === "KeyR") this.newRound();
   }
 
-  draw(ctx: CanvasRenderingContext2D) {
+  draw(ctx: CanvasRenderingContext2D, pixelScale = 1) {
     const a = this.arena;
     const view: BallsView = {
       balls: a.slots.map((s) => ({ index: s.index, ...s.ball })),
@@ -73,7 +73,7 @@ export class BallsHost implements HostGame {
       netLabel: this.netLabel,
       footer: a.phase === 2 ? FOOTER_OVER : a.time < 5 ? HINT : "",
     };
-    this.renderer.draw(ctx, view);
+    this.renderer.draw(ctx, view, pixelScale);
   }
 
   frame(): NetFrame {
@@ -185,7 +185,7 @@ export class BallsGuest implements GuestGame {
     return msg;
   }
 
-  draw(ctx: CanvasRenderingContext2D) {
+  draw(ctx: CanvasRenderingContext2D, pixelScale = 1) {
     const s = this.state;
     if (!s) return;
     const balls = s.b.map((row, i) => this.smooth.get(i) ?? {
@@ -206,6 +206,6 @@ export class BallsGuest implements GuestGame {
       netLabel: this.netLabel,
       footer: s.ph === 2 ? "Esperando al anfitrión · Esc: menú" : s.t < 5 ? HINT : "",
     };
-    this.renderer.draw(ctx, view);
+    this.renderer.draw(ctx, view, pixelScale);
   }
 }

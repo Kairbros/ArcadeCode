@@ -9,11 +9,13 @@ import { BallsGuest, BallsHost } from "./balls/game";
 import { BallsInput } from "./balls/input";
 import { StickGuest, StickHost } from "./stick/game";
 import { StickInput } from "./stick/input";
+import { RuletaGuest, RuletaHost } from "./ruleta/game";
+import { RuletaInput } from "./ruleta/input";
 import type { Keyboard } from "./core/keyboard";
 import { settings } from "./core/settings";
 import type { GuestGame, HostGame } from "./net/types";
 
-export type GameId = "bomber" | "karts" | "balls" | "stick";
+export type GameId = "bomber" | "karts" | "balls" | "stick" | "ruleta";
 
 export interface GameInfo {
   id: GameId;
@@ -23,9 +25,10 @@ export interface GameInfo {
 
 export const GAMES: GameInfo[] = [
   { id: "bomber", name: "Bomberman", desc: "Bombas, cajas y buffs · mapas procedurales" },
-  { id: "karts", name: "Karts", desc: "Carreras en modo 7 · circuitos procedurales" },
-  { id: "balls", name: "Sumo de bolas", desc: "Empuja a los rivales a la lava · modo 7" },
+  { id: "karts", name: "Karts", desc: "Carreras en 3D con relieve · circuitos procedurales" },
+  { id: "balls", name: "Sumo de bolas", desc: "Empuja a los rivales a la lava · 3D" },
   { id: "stick", name: "Monigotes", desc: "Peleas en plataformas con armas · último en pie" },
+  { id: "ruleta", name: "Ruleta de cartuchos", desc: "Escopeta, cartuchos y objetos contra el crupier · 3D" },
 ];
 
 export function isGameId(id: unknown): id is GameId {
@@ -44,6 +47,7 @@ export function createHostGame(id: GameId, keyboard: Keyboard, remoteCount: numb
   if (id === "karts") return new KartsHost(new KartsInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "balls") return new BallsHost(new BallsInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "stick") return new StickHost(new StickInput(keyboard), remoteCount, "host", settings.bots);
+  if (id === "ruleta") return new RuletaHost(new RuletaInput(keyboard), remoteCount, "host", settings.bots);
   return new BombermanHost(bothSchemes(keyboard), remoteCount);
 }
 
@@ -51,5 +55,6 @@ export function createGuestGame(id: GameId, index: number, keyboard: Keyboard): 
   if (id === "karts") return new KartsGuest(index, new KartsInput(keyboard));
   if (id === "balls") return new BallsGuest(index, new BallsInput(keyboard));
   if (id === "stick") return new StickGuest(index, new StickInput(keyboard));
+  if (id === "ruleta") return new RuletaGuest(index, new RuletaInput(keyboard));
   return new BombermanGuest(index, bothSchemes(keyboard));
 }

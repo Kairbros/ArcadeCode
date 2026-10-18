@@ -1,11 +1,15 @@
-// Render en modo 7 de Sumo de bolas. Cámara fija al sur de la arena. Cada píxel del suelo se proyecta
-// sobre dos planos: la plataforma y la lava (más abajo). Si el rayo cae fuera de la plataforma pero
-// dentro del círculo en la lava, ha atravesado el lateral del cilindro: ahí se pinta la pared.
+// Render 3D de Sumo de bolas (Three.js, estilo de bloques): plataforma de baldosas sobre un mar de
+// lava de cubos, bolas facetadas con su muñeco encima y cámara fija al sur, alta, mirando al norte.
+// Las baldosas que quedan fuera del radio tiemblan y caen a la lava. El HUD se dibuja en 2D encima.
+// Coordenadas del juego: x a la derecha, y hacia la cámara, z hacia arriba; en la escena se usan
+// metros de juguete (× S) con y hacia arriba.
+import * as THREE from "three";
 import { PLAYER_COLORS, PLAYER_NAMES, type RGB } from "../core/config";
-import { css, fillCircle, fillEllipse, roundRect, shade, text, type Ctx } from "../core/draw";
+import { badge, fitText, panel, segmentBar, shadowText, text, titleText, type Ctx } from "../core/draw";
+import { glRenderer, projectTo, renderInto } from "../core/three";
 import {
-  BALL_R, BH, BW, CAM_DIST, CAM_FOLLOW, CAM_HEIGHT, CHECKER, DASH_COOLDOWN, FOCAL, HORIZON, LAVA_DROP, MAX_SPEED,
-  RIM_W, ROUND_TIME, SHRINK_START,
+  ARENA_R, BALL_R, BH, BW, CAM_DIST, CAM_FOLLOW, CAM_HEIGHT, CAM_PITCH, CHECKER, DASH_COOLDOWN, FOV, LAVA_DROP,
+  MAX_SPEED, RIM_W, ROUND_TIME, SHRINK_START,
 } from "./config";
 import type { BallState } from "./arena";
 
@@ -41,7 +45,6 @@ export interface BallsView {
   footer: string;
 }
 
-const pack = (c: RGB) => ((255 << 24) | (c[2] << 16) | (c[1] << 8) | c[0]) >>> 0;
 const SMALL = "bold 8px Arial, sans-serif";
 const MID = "bold 11px Arial, sans-serif";
 const TINY = "bold 7px Arial, sans-serif";
@@ -50,345 +53,446 @@ export function ballName(index: number, ai: boolean): string {
   return ai ? `CPU ${index + 1}` : PLAYER_NAMES[index];
 }
 
-// --- Lava: ruido de valor en una baldosa de 128×128 y paleta que se desplaza con el tiempo ---
-const LAVA_N = 128;
-const lavaHeights = (() => {
-  const h = new Uint8Array(LAVA_N * LAVA_N);
-  const grid = (cells: number) => {
-    const g = Array.from({ length: cells * cells }, () => Math.random());
-    return (x: number, y: number) => {
-      const fx = (x / LAVA_N) * cells;
-      const fy = (y / LAVA_N) * cells;
-      const x0 = Math.floor(fx), y0 = Math.floor(fy);
-      const tx = fx - x0, ty = fy - y0;
-      const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
-      const at = (i: number, j: number) => g[((j % cells) * cells) + (i % cells)];
-      const top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * sx;
-      const bot = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * sx;
-      return top + (bot - top) * sy;
-    };
-  };
-  const big = grid(8);
-  const small = grid(32);
-  for (let y = 0; y < LAVA_N; y++) {
-    for (let x = 0; x < LAVA_N; x++) h[y * LAVA_N + x] = Math.floor((big(x, y) * 0.7 + small(x, y) * 0.3) * 255);
-  }
-  return h;
-})();
+const S = 0.1; // unidades del juego → escena
+const R = BALL_R * S;
+const LAVA_Y = -LAVA_DROP * S; // superficie de la lava
+const TILE = 6; // lado de cada baldosa (unidades del juego)
+const LAVA_CELL = 12;
+const LAVA_R = 340;
+
+/** Punto del juego (x, y, altura) en la escena. */
+const at = (x: number, y: number, h: number): [number, number, number] => [x * S, h * S, y * S];
+
+/** Valor fijo pseudoaleatorio para cada celda. */
+function hash2(x: number, y: number): number {
+  const h = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+  return h - Math.floor(h);
+}
 
 /** Paleta cíclica de la lava: rojo oscuro → naranja → amarillo → naranja... */
-const lavaPalette = (() => {
-  const p = new Uint32Array(256);
+const LAVA_PALETTE = (() => {
   const stops: RGB[] = [[150, 24, 8], [220, 60, 10], [250, 130, 20], [255, 210, 70], [250, 130, 20], [220, 60, 10]];
-  for (let i = 0; i < 256; i++) {
+  return Array.from({ length: 256 }, (_, i) => {
     const f = (i / 256) * stops.length;
-    const a = stops[Math.floor(f)];
-    const b = stops[(Math.floor(f) + 1) % stops.length];
-    const t = f - Math.floor(f);
-    p[i] = pack([0, 1, 2].map((k) => Math.round(a[k] + (b[k] - a[k]) * t)) as unknown as RGB);
-  }
-  return p;
+    const a = stops[Math.floor(f)], b = stops[(Math.floor(f) + 1) % stops.length], t = f - Math.floor(f);
+    const c = (k: number) => (a[k] + (b[k] - a[k]) * t) / 255;
+    return new THREE.Color().setRGB(c(0) * 0.85, c(1) * 0.85, c(2) * 0.85, THREE.SRGBColorSpace);
+  });
 })();
 
-const TILE_A = pack([226, 202, 158]);
-const TILE_B = pack([158, 108, 72]);
-const RIM_A = pack([132, 122, 116]);
-const RIM_B = pack([112, 104, 100]);
-const SKY_TOP: RGB = [30, 10, 14];
-const SKY_BOTTOM: RGB = [120, 38, 20];
-const SMOKE: RGB = [70, 18, 12];
-const BRICK: RGB = [150, 70, 50];
-const MORTAR: RGB = [70, 40, 34];
+/** Caja con la cara de arriba más clara que los lados (colores por vértice, multiplicados por el de la instancia). */
+function shadedBox(w: number, h: number, d: number, side: number): THREE.BufferGeometry {
+  const g = new THREE.BoxGeometry(w, h, d).translate(0, -h / 2, 0);
+  const n = g.attributes.normal, p = g.attributes.position;
+  const colors = new Float32Array(p.count * 3);
+  for (let i = 0; i < p.count; i++) {
+    // Arriba, color pleno; los lados se oscurecen hacia abajo.
+    const k = n.getY(i) > 0.5 ? 1 : side * (1 + p.getY(i) / h) * 0.7 + side * 0.3;
+    colors.set([k, k, k], i * 3);
+  }
+  g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return g;
+}
 
-interface Splash {
+/** Bola de caras planas (icosaedro) con una franja clara en el ecuador para que se note que rueda. */
+function ballGeometry(color: number): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(R, 1);
+  const p = g.attributes.position;
+  const base = new THREE.Color(color), band = base.clone().lerp(new THREE.Color(0xffffff), 0.6);
+  const colors = new Float32Array(p.count * 3);
+  for (let f = 0; f < p.count; f += 3) {
+    const cy = (p.getY(f) + p.getY(f + 1) + p.getY(f + 2)) / 3;
+    const c = Math.abs(cy) < R * 0.3 ? band : base;
+    for (let k = 0; k < 3; k++) colors.set([c.r, c.g, c.b], (f + k) * 3);
+  }
+  g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return g;
+}
+
+/** Muñeco de bloques que va de pie sobre la bola, mirando a la cámara (+z). Pies en y = 0. */
+function buildRider(color: number): { root: THREE.Group; arms: THREE.Group[] } {
+  const c = new THREE.Color(color);
+  const mat = (hex: number | THREE.Color, rough = 0.8) => new THREE.MeshStandardMaterial({ color: hex, roughness: rough });
+  const box = (s: [number, number, number], m: THREE.Material, p: [number, number, number]) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(...s), m);
+    mesh.position.set(...p);
+    mesh.castShadow = true;
+    return mesh;
+  };
+  const shirt = mat(c.clone().multiplyScalar(0.85)), skin = mat(0xf0c8a0), pants = mat(0x2a2a3a), dark = mat(0x1c1c24);
+  const root = new THREE.Group();
+  root.add(
+    box([0.16, 0.42, 0.18], pants, [-0.11, 0.21, 0]),
+    box([0.16, 0.42, 0.18], pants, [0.11, 0.21, 0]),
+    box([0.46, 0.46, 0.28], shirt, [0, 0.65, 0]),
+    box([0.34, 0.34, 0.32], skin, [0, 1.06, 0]),
+    box([0.38, 0.1, 0.36], mat(color), [0, 1.27, 0]),
+    box([0.3, 0.04, 0.16], mat(color), [0, 1.23, 0.24]),
+    box([0.05, 0.06, 0.02], dark, [-0.08, 1.08, 0.165]),
+    box([0.05, 0.06, 0.02], dark, [0.08, 1.08, 0.165]),
+  );
+  // Brazos abiertos para mantener el equilibrio (giran en el hombro).
+  const arms = [-1, 1].map((s) => {
+    const pivot = new THREE.Group();
+    pivot.position.set(s * 0.23, 0.82, 0);
+    pivot.add(box([0.38, 0.11, 0.11], shirt, [s * 0.19, 0, 0]));
+    root.add(pivot);
+    return pivot;
+  });
+  return { root, arms };
+}
+
+interface Tile {
   x: number;
   y: number;
+  d: number;
+  fall: number; // segundos cayendo (-1 = en su sitio)
+  spin: number;
+}
+
+interface Bit {
+  mesh: THREE.Mesh;
+  vel: [number, number, number];
   t: number;
+}
+
+interface Player3D {
+  ball: THREE.Mesh;
+  rider: THREE.Group;
+  arms: THREE.Group[];
+  q: THREE.Quaternion;
+}
+
+/** La escena 3D: se construye una vez y en cada frame solo se recoloca. */
+class Stage {
+  readonly scene = new THREE.Scene();
+  readonly camera = new THREE.PerspectiveCamera(FOV, BW / BH, 0.1, 80);
+  private tiles: Tile[] = [];
+  private tileMesh: THREE.InstancedMesh;
+  private lavaCells: { x: number; z: number; n: number }[] = [];
+  private lavaMesh: THREE.InstancedMesh;
+  private players = new Map<number, Player3D>();
+  private bits: Bit[] = [];
+  private embers: Bit[] = [];
+  private flash = new THREE.PointLight(0xff8030, 0, 14, 1.5);
+  private flashT = 9;
+  private lastRadius = ARENA_R;
+  private readonly o = new THREE.Object3D();
+  private readonly c = new THREE.Color();
+
+  constructor() {
+    const sc = this.scene;
+    sc.background = new THREE.Color(0x1a0606);
+    sc.fog = new THREE.Fog(0x2a0905, 20, 48);
+
+    // Luz: sol cálido desde arriba (con sombras) y el resplandor de la lava desde abajo.
+    const sun = new THREE.DirectionalLight(0xffe8d0, 1.7);
+    sun.position.set(6, 16, 10);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(1024, 1024);
+    Object.assign(sun.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 1, far: 40 });
+    sun.shadow.bias = -0.0005;
+    sc.add(sun, new THREE.HemisphereLight(0x5a3040, 0xff5020, 1.1), this.flash);
+
+    // Plataforma: baldosas que son columnas hasta la lava.
+    for (let x = -ARENA_R; x < ARENA_R; x += TILE) {
+      for (let y = -ARENA_R; y < ARENA_R; y += TILE) {
+        const cx = x + TILE / 2, cy = y + TILE / 2, d = Math.hypot(cx, cy);
+        if (d <= ARENA_R) this.tiles.push({ x: cx, y: cy, d, fall: -1, spin: hash2(cx, cy) - 0.5 });
+      }
+    }
+    this.tileMesh = new THREE.InstancedMesh(
+      shadedBox(TILE * S * 0.95, -LAVA_Y + 0.7, TILE * S * 0.95, 0.45),
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 }),
+      this.tiles.length,
+    );
+    this.tileMesh.castShadow = this.tileMesh.receiveShadow = true;
+    sc.add(this.tileMesh);
+
+    // Lava: un mar de cubos luminosos que suben, bajan y cambian de color.
+    for (let x = -LAVA_R; x < LAVA_R; x += LAVA_CELL) {
+      for (let z = -LAVA_R; z < LAVA_R; z += LAVA_CELL) {
+        if (Math.hypot(x, z) <= LAVA_R) this.lavaCells.push({ x: x + LAVA_CELL / 2, z: z + LAVA_CELL / 2, n: hash2(x, z) });
+      }
+    }
+    this.lavaMesh = new THREE.InstancedMesh(
+      shadedBox(LAVA_CELL * S * 0.98, 1.2, LAVA_CELL * S * 0.98, 0.6),
+      new THREE.MeshBasicMaterial({ vertexColors: true }),
+      this.lavaCells.length,
+    );
+    sc.add(this.lavaMesh);
+
+    // Paredes del volcán: bloques de roca oscura alrededor, perdiéndose en la bruma.
+    const rock = new THREE.MeshStandardMaterial({ color: 0x2b2320, roughness: 1 });
+    for (let i = 0; i < 46; i++) {
+      const a = (i / 46) * Math.PI * 2, r = 38 + hash2(i, 1) * 6, h = 4 + hash2(i, 2) * 12, w = 3 + hash2(i, 3) * 4;
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), rock);
+      m.position.set(Math.cos(a) * r, LAVA_Y + h / 2 - 1, Math.sin(a) * r);
+      m.rotation.y = hash2(i, 4) * 3;
+      sc.add(m);
+    }
+    // Chispas que suben de la lava y salpicaduras.
+    const ember = new THREE.MeshBasicMaterial({ color: 0xffb040 });
+    for (let i = 0; i < 30; i++) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.06), ember);
+      this.embers.push({ mesh, vel: [0, 0, 0], t: hash2(i, 9) * 4 });
+      sc.add(mesh);
+    }
+    const splash = new THREE.MeshBasicMaterial({ color: 0xff9030 });
+    for (let i = 0; i < 48; i++) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.16), splash);
+      mesh.visible = false;
+      this.bits.push({ mesh, vel: [0, 0, 0], t: 9 });
+      sc.add(mesh);
+    }
+  }
+
+  private player(index: number): Player3D {
+    let p = this.players.get(index);
+    if (p) return p;
+    const color = PLAYER_COLORS[index];
+    const hex = (color[0] << 16) | (color[1] << 8) | color[2];
+    const ball = new THREE.Mesh(ballGeometry(hex), new THREE.MeshStandardMaterial({
+      vertexColors: true, flatShading: true, roughness: 0.45, metalness: 0.05,
+    }));
+    ball.castShadow = true;
+    const { root, arms } = buildRider(hex);
+    this.scene.add(ball, root);
+    p = { ball, rider: root, arms, q: new THREE.Quaternion() };
+    this.players.set(index, p);
+    return p;
+  }
+
+  /** Cubitos de lava que saltan cuando una bola cae. */
+  splash(x: number, y: number) {
+    const [sx, , sz] = at(x, y, 0);
+    let spawned = 0;
+    for (const b of this.bits) {
+      if (b.t < 1.2 || spawned >= 16) continue;
+      const a = Math.random() * Math.PI * 2, v = 2 + Math.random() * 3;
+      b.t = 0;
+      b.vel = [Math.cos(a) * v, 5 + Math.random() * 4, Math.sin(a) * v];
+      b.mesh.position.set(sx, LAVA_Y, sz);
+      b.mesh.visible = true;
+      spawned++;
+    }
+    this.flash.position.set(sx, LAVA_Y + 1.5, sz);
+    this.flashT = 0;
+  }
+
+  update(v: BallsView, time: number, dt: number, camX: number) {
+    // --- Baldosas ---
+    if (v.radius > this.lastRadius + 1) for (const t of this.tiles) t.fall = -1; // ronda nueva
+    this.lastRadius = v.radius;
+    const o = this.o;
+    this.tiles.forEach((t, i) => {
+      if (t.fall < 0 && t.d > v.radius) t.fall = 0;
+      if (t.fall >= 0) t.fall += dt;
+      o.position.set(t.x * S, 0, t.y * S);
+      o.rotation.set(0, 0, 0);
+      o.scale.setScalar(1);
+      if (t.fall >= 0) {
+        o.position.y = -6 * t.fall * t.fall;
+        o.rotation.set(t.fall * t.spin * 2, 0, t.fall * t.spin * 3);
+        if (t.fall > 1.6) o.scale.setScalar(0);
+      }
+      o.updateMatrix();
+      this.tileMesh.setMatrixAt(i, o.matrix);
+      const rim = t.d > v.radius - RIM_W;
+      const hex = rim
+        ? (hash2(t.x, t.y) < 0.5 ? 0x857a74 : 0x6f6864)
+        : ((Math.floor(t.x / CHECKER) ^ Math.floor(t.y / CHECKER)) & 1 ? 0xe2ca9e : 0x9e6c48);
+      this.c.setHex(hex).multiplyScalar(0.94 + hash2(t.y, t.x) * 0.12);
+      this.tileMesh.setColorAt(i, this.c);
+    });
+    this.tileMesh.instanceMatrix.needsUpdate = true;
+    this.tileMesh.instanceColor!.needsUpdate = true;
+
+    // --- Lava ---
+    this.lavaCells.forEach((cell, i) => {
+      const wave = Math.sin(cell.x * 0.03 + time * 1.3 + cell.n * 6) * 0.5 + 0.5;
+      o.position.set(cell.x * S, LAVA_Y - 0.25 + wave * 0.3, cell.z * S);
+      o.rotation.set(0, 0, 0);
+      o.scale.setScalar(1);
+      o.updateMatrix();
+      this.lavaMesh.setMatrixAt(i, o.matrix);
+      const k = (cell.n * 0.6 + wave * 0.3 + time * 0.12) % 1;
+      this.lavaMesh.setColorAt(i, LAVA_PALETTE[Math.floor(k * 255)]);
+    });
+    this.lavaMesh.instanceMatrix.needsUpdate = true;
+    this.lavaMesh.instanceColor!.needsUpdate = true;
+
+    // --- Bolas y muñecos ---
+    for (const b of v.balls) {
+      const p = this.player(b.index);
+      const visible = b.state !== 2;
+      p.ball.visible = p.rider.visible = visible;
+      if (!visible) continue;
+      p.ball.position.set(...at(b.x, b.y, BALL_R + b.z));
+      // Rueda: gira alrededor del eje perpendicular a la velocidad.
+      const speed = Math.hypot(b.vx, b.vy);
+      if (speed > 1 && b.state === 0) {
+        const axis = new THREE.Vector3(b.vy, 0, -b.vx).normalize();
+        p.q.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, (speed * dt) / BALL_R));
+      }
+      p.ball.quaternion.copy(p.q);
+      p.rider.position.set(...at(b.x, b.y, BALL_R * 2 + b.z - 1));
+      const lean = Math.max(-0.45, Math.min(0.45, (b.vx / MAX_SPEED) * 0.45));
+      const tilt = Math.max(-0.3, Math.min(0.3, (b.vy / MAX_SPEED) * 0.3));
+      p.rider.rotation.set(tilt, 0, -lean);
+      const wave = Math.sin(time * 9 + b.index) * 0.35;
+      p.arms[0].rotation.z = -0.3 + wave;
+      p.arms[1].rotation.z = 0.3 + wave;
+    }
+
+    // --- Partículas ---
+    for (const b of this.bits) {
+      if (b.t >= 1.2) continue;
+      b.t += dt;
+      b.vel[1] -= 14 * dt;
+      b.mesh.position.x += b.vel[0] * dt;
+      b.mesh.position.y += b.vel[1] * dt;
+      b.mesh.position.z += b.vel[2] * dt;
+      b.mesh.rotation.x += dt * 6;
+      b.mesh.scale.setScalar(Math.max(0.01, 1 - b.t / 1.2));
+      if (b.t >= 1.2 || b.mesh.position.y < LAVA_Y - 0.5) {
+        b.t = 9;
+        b.mesh.visible = false;
+      }
+    }
+    this.embers.forEach((e, i) => {
+      e.t += dt;
+      if (e.t > 4) {
+        e.t = 0;
+        const a = Math.random() * Math.PI * 2, r = 12 + Math.random() * 16;
+        e.mesh.position.set(Math.cos(a) * r, LAVA_Y, Math.sin(a) * r - 4);
+      }
+      e.mesh.position.y += dt * (0.8 + hash2(i, 3) * 0.8);
+      e.mesh.position.x += Math.sin(time * 2 + i) * dt * 0.3;
+      e.mesh.scale.setScalar(1 - e.t / 4);
+    });
+    this.flashT += dt;
+    this.flash.intensity = this.flashT < 0.6 ? 40 * (1 - this.flashT / 0.6) : 0;
+
+    // --- Cámara fija al sur, siguiendo un poco al jugador de lado ---
+    this.camera.position.set(camX * S, CAM_HEIGHT * S, CAM_DIST * S);
+    this.camera.rotation.set(CAM_PITCH, 0, 0, "YXZ");
+  }
 }
 
 export class BallsRenderer {
   time = 0;
-  private readonly img = new ImageData(BW, BH);
-  private readonly px = new Uint32Array(this.img.data.buffer);
-  private readonly off = document.createElement("canvas");
-  private readonly offCtx: CanvasRenderingContext2D;
+  private stage: Stage | null = null;
   private camX = 0;
+  private dt = 0;
   // Estado anterior de cada bola (para detectar cuándo toca la lava).
   private prev = new Map<number, { state: BallState }>();
-  private splashes: Splash[] = [];
   private outAt = new Map<number, number>();
-
-  constructor() {
-    this.off.width = BW;
-    this.off.height = BH;
-    this.offCtx = this.off.getContext("2d")!;
-  }
 
   reset() {
     this.prev.clear();
-    this.splashes = [];
     this.outAt.clear();
   }
 
   update(dt: number) {
     this.time += dt;
-    for (const s of this.splashes) s.t += dt;
-    this.splashes = this.splashes.filter((s) => s.t < 0.8);
+    this.dt = dt;
   }
 
-  draw(ctx: Ctx, v: BallsView) {
+  draw(ctx: Ctx, v: BallsView, pixelScale = 1) {
     const me = v.balls[v.me];
     if (me && me.state === 0) this.camX += (me.x * CAM_FOLLOW - this.camX) * 0.08;
-    this.track(v);
-
-    this.drawBackground(v.radius);
-    this.offCtx.putImageData(this.img, 0, 0);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(this.off, 0, 0, BW, BH);
-
-    this.drawSplashes(ctx);
-    // De lejos a cerca.
-    const order = [...v.balls].filter((b) => b.state !== 2).sort((a, b) => a.y - b.y);
-    for (const b of order) this.drawBall(ctx, b, v);
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, BW, BH);
+    if (!glRenderer()) {
+      text(ctx, "Este equipo no puede mostrar gráficos 3D (WebGL)", BW / 2, BH / 2 - 10, [255, 200, 160], SMALL, "center");
+      this.drawHud(ctx, v);
+      return;
+    }
+    const stage = (this.stage ??= new Stage());
+    this.track(v, stage);
+    stage.update(v, this.time, this.dt, this.camX);
+    renderInto(ctx, stage.scene, stage.camera, BW, BH, pixelScale, 1.15);
+    this.drawLabels(ctx, v, stage);
     this.drawHud(ctx, v);
   }
 
-  /** Proyecta un punto del mundo (h = altura sobre la plataforma). */
-  private project(x: number, y: number, h: number): { sx: number; sy: number; s: number; depth: number } {
-    const depth = Math.max(8, CAM_DIST - y);
-    const s = FOCAL / depth;
-    return { sx: BW / 2 + (x - this.camX) * s, sy: HORIZON + (CAM_HEIGHT - h) * s, s, depth };
-  }
-
   /** Chapoteos al tocar la lava. */
-  private track(v: BallsView) {
+  private track(v: BallsView, stage: Stage) {
     for (const b of v.balls) {
       const p = this.prev.get(b.index);
       if (p && p.state !== 2 && b.state === 2) {
-        this.splashes.push({ x: b.x, y: b.y, t: 0 });
         this.outAt.set(b.index, this.time);
+        stage.splash(b.x, b.y);
       }
       this.prev.set(b.index, { state: b.state });
     }
   }
 
-  // --- fondo: cielo, plataforma, pared y lava ---
-  private drawBackground(radius: number) {
-    const px = this.px;
-    for (let y = 0; y <= HORIZON; y++) {
-      const t = y / HORIZON;
-      px.fill(pack([0, 1, 2].map((k) => Math.round(SKY_TOP[k] + (SKY_BOTTOM[k] - SKY_TOP[k]) * t)) as unknown as RGB), y * BW, (y + 1) * BW);
-    }
-    const R2 = radius * radius;
-    const rimIn = Math.max(0, radius - RIM_W);
-    const rimIn2 = rimIn * rimIn;
-    const flow = this.time * 5;
-    const cycle = Math.floor(this.time * 40);
-    const camX = this.camX;
-    for (let y = HORIZON + 1; y < BH; y++) {
-      const dy = y - HORIZON;
-      const z1 = (CAM_HEIGHT * FOCAL) / dy; // distancia a la que la fila toca la plataforma
-      const z2 = ((CAM_HEIGHT + LAVA_DROP) * FOCAL) / dy; // ... y la lava
-      const step1 = z1 / FOCAL;
-      const step2 = z2 / FOCAL;
-      const wy1 = CAM_DIST - z1;
-      const wy2 = CAM_DIST - z2;
-      let wx1 = camX - step1 * (BW / 2);
-      let wx2 = camX - step2 * (BW / 2);
-      // Niebla de humo hacia el horizonte (solo la lava llega tan lejos).
-      const fa = Math.round(Math.max(0, Math.min(1, (z2 - 260) / 700)) * 220);
-      const lavaRow = ((((wy2 + flow * 0.6) / 2) | 0) & (LAVA_N - 1)) * LAVA_N;
-      let o = y * BW;
-      for (let x = 0; x < BW; x++, o++, wx1 += step1, wx2 += step2) {
-        const d1 = wx1 * wx1 + wy1 * wy1;
-        let c: number;
-        if (d1 < R2) {
-          if (d1 > rimIn2) c = ((Math.floor(wx1 / 7) ^ Math.floor(wy1 / 7)) & 1) ? RIM_A : RIM_B;
-          else c = ((Math.floor(wx1 / CHECKER) ^ Math.floor(wy1 / CHECKER)) & 1) ? TILE_A : TILE_B;
-        } else if (wx2 * wx2 + wy2 * wy2 < R2) {
-          c = this.wall(wx1, wy1, wx2, wy2, d1, R2, radius);
-        } else {
-          const h = lavaHeights[lavaRow + ((((wx2 + flow) / 2) | 0) & (LAVA_N - 1))];
-          c = lavaPalette[(h + cycle) & 255];
-          if (fa) c = blend(c, SMOKE, fa);
-        }
-        px[o] = c;
+  /** Número de cada jugador sobre su muñeco (también identifica en escala de grises) y marca propia. */
+  private drawLabels(ctx: Ctx, v: BallsView, stage: Stage) {
+    for (const b of v.balls) {
+      if (b.state === 2) continue;
+      const p = projectTo(stage.camera, at(b.x, b.y, BALL_R * 2 + b.z + 13), BW, BH);
+      if (!p) continue;
+      const [x, y] = p;
+      badge(ctx, x, y, 4.5, PLAYER_COLORS[b.index], String(b.index + 1));
+      if (b.index === v.me) {
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.moveTo(x - 3.5, y - 10);
+        ctx.lineTo(x + 3.5, y - 10);
+        ctx.lineTo(x, y - 6);
+        ctx.closePath();
+        ctx.fill();
       }
-    }
-  }
-
-  /** Lateral del cilindro: ladrillos, más oscuros hacia los lados y con el resplandor de la lava abajo. */
-  private wall(x1: number, y1: number, x2: number, y2: number, d1: number, R2: number, radius: number): number {
-    // Punto donde el rayo entra en el cilindro: |p1 + t (p2 − p1)| = R.
-    const ex = x2 - x1, ey = y2 - y1;
-    const a = ex * ex + ey * ey;
-    const b = 2 * (x1 * ex + y1 * ey);
-    const disc = Math.max(0, b * b - 4 * a * (d1 - R2));
-    const t = Math.max(0, Math.min(1, (-b - Math.sqrt(disc)) / (2 * a)));
-    const hx = x1 + ex * t, hy = y1 + ey * t;
-    const rows = t * 3;
-    const row = Math.floor(rows);
-    const col = (Math.atan2(hy, hx) * radius) / 14 + (row & 1) * 0.5;
-    const mortar = rows - row < 0.14 || col - Math.floor(col) < 0.1;
-    const light = 0.35 + 0.65 * Math.max(0, hy / radius);
-    let c: RGB = shade(mortar ? MORTAR : BRICK, light);
-    const glow = t * t * t;
-    c = [c[0] + (255 - c[0]) * glow * 0.6, c[1] + (120 - c[1]) * glow * 0.4, c[2] * (1 - glow * 0.5)].map(Math.round) as unknown as RGB;
-    return pack(c);
-  }
-
-  private drawSplashes(ctx: Ctx) {
-    for (const s of this.splashes) {
-      const p = this.project(s.x, s.y, -LAVA_DROP);
-      const k = s.t / 0.8;
-      ctx.strokeStyle = `rgba(255,200,80,${1 - k})`;
-      ctx.lineWidth = Math.max(1, 2 * p.s);
-      ctx.beginPath();
-      ctx.ellipse(p.sx, p.sy, BALL_R * p.s * (1 + k * 1.6), BALL_R * p.s * 0.35 * (1 + k * 1.6), 0, 0, Math.PI * 2);
-      ctx.stroke();
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2;
-        const r = BALL_R * p.s * (0.4 + k * 1.2);
-        const up = Math.sin(k * Math.PI) * 14 * p.s;
-        fillCircle(ctx, p.sx + Math.cos(a) * r, p.sy - up + Math.sin(a) * r * 0.3, 1.4 * p.s * (1 - k), [255, 170, 40]);
-      }
-    }
-  }
-
-  // --- bolas y personajes ---
-  private drawBall(ctx: Ctx, b: BallSprite, v: BallsView) {
-    const color = PLAYER_COLORS[b.index];
-    const g = this.project(b.x, b.y, 0);
-    const c = this.project(b.x, b.y, BALL_R + b.z);
-    const r = BALL_R * c.s;
-    if (r < 1) return;
-    ctx.save();
-    // Al caer por el fondo, la plataforma tapa la bola.
-    if (b.state === 1 && b.y < 0 && Math.abs(b.x) < v.radius) {
-      const edge = this.project(b.x, -Math.sqrt(v.radius * v.radius - b.x * b.x), 0);
-      ctx.beginPath();
-      ctx.rect(0, 0, BW, edge.sy);
-      ctx.clip();
-    }
-    // Sombra sobre la plataforma (aplastada por la perspectiva).
-    if (b.state === 0) {
-      const hh = r * (CAM_HEIGHT / g.depth);
-      fillEllipse(ctx, g.sx - r, g.sy - hh, r * 2, hh * 2, "rgba(0,0,0,0.35)");
-    }
-
-    const grad = ctx.createRadialGradient(c.sx - r * 0.35, c.sy - r * 0.4, r * 0.1, c.sx, c.sy, r);
-    grad.addColorStop(0, css([Math.min(255, color[0] + 110), Math.min(255, color[1] + 110), Math.min(255, color[2] + 110)]));
-    grad.addColorStop(0.55, css(color));
-    grad.addColorStop(1, css(shade(color, 0.45)));
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(c.sx, c.sy, r, 0, Math.PI * 2);
-    ctx.fill();
-    if (b.state === 0 || b.z > -BALL_R) this.drawRider(ctx, b, c.sx, c.sy - r, c.s, b.index === v.me);
-    ctx.restore();
-  }
-
-  /** Personaje de pie sobre la bola, haciendo equilibrio (se inclina hacia donde rueda). */
-  private drawRider(ctx: Ctx, b: BallSprite, fx: number, fy: number, s: number, mine: boolean) {
-    const color = PLAYER_COLORS[b.index];
-    const lean = Math.max(-0.45, Math.min(0.45, (b.vx / MAX_SPEED) * 0.45));
-    const wave = Math.sin(this.time * 9 + b.index) * 0.25;
-    ctx.save();
-    ctx.translate(fx, fy);
-    ctx.rotate(lean);
-    ctx.scale(s, s);
-    // Piernas
-    ctx.fillStyle = "#2a2a3a";
-    ctx.fillRect(-2.6, -5, 2, 5);
-    ctx.fillRect(0.6, -5, 2, 5);
-    // Brazos abiertos para mantener el equilibrio
-    ctx.strokeStyle = css(shade(color, 0.8));
-    ctx.lineWidth = 1.6;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(-3, -10);
-    ctx.lineTo(-7.5, -12 + wave * 6);
-    ctx.moveTo(3, -10);
-    ctx.lineTo(7.5, -12 - wave * 6);
-    ctx.stroke();
-    // Cuerpo con el número del jugador
-    roundRect(ctx, -3.6, -12.5, 7.2, 8, 2, shade(color, 0.8), [20, 20, 28], 0.6);
-    text(ctx, String(b.index + 1), 0, -8.4, [255, 255, 255], "bold 6px Arial, sans-serif", "center", "middle");
-    // Cabeza y gorra
-    fillCircle(ctx, 0, -15.5, 3.2, [250, 214, 180]);
-    ctx.fillStyle = css(color);
-    ctx.beginPath();
-    ctx.arc(0, -16.2, 3.4, Math.PI, 0);
-    ctx.fill();
-    ctx.fillRect(-0.5, -16.6, 4.8, 1.2);
-    ctx.restore();
-    // Marca sobre el propio jugador
-    if (mine) {
-      const y = fy - 22 * s;
-      ctx.fillStyle = "#fff";
-      ctx.beginPath();
-      ctx.moveTo(fx - 3.5, y - 4);
-      ctx.lineTo(fx + 3.5, y - 4);
-      ctx.lineTo(fx, y);
-      ctx.closePath();
-      ctx.fill();
     }
   }
 
   // --- HUD ---
   private drawHud(ctx: Ctx, v: BallsView) {
-    const shadowText = (str: string, x: number, y: number, color: RGB, font: string, align: CanvasTextAlign = "left") => {
-      text(ctx, str, x + 1, y + 1, [0, 0, 0], font, align);
-      text(ctx, str, x, y, color, font, align);
-    };
-    // Tiempo restante en un círculo, arriba a la izquierda.
+    // Tiempo restante en un recuadro, arriba a la izquierda.
     const left = Math.max(0, Math.ceil(ROUND_TIME - v.time));
-    fillCircle(ctx, 16, 16, 12, [20, 20, 30]);
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(16, 16, 11, 0, Math.PI * 2);
-    ctx.stroke();
-    text(ctx, String(left), 16, 16.5, left <= 10 ? [255, 120, 100] : [255, 255, 255], "bold 11px Arial, sans-serif", "center", "middle");
+    panel(ctx, 4, 4, 26, 22, left <= 10 ? [255, 90, 80] : [255, 207, 80], 0.8);
+    titleText(ctx, String(left), 17, 15, left <= 10 ? [255, 120, 100] : [255, 255, 255], "12px", "center", "middle");
 
     const alive = v.balls.filter((b) => b.state === 0).length;
-    shadowText(`EN PIE ${alive}/${v.balls.length}`, BW - 5, 5, [255, 220, 60], SMALL, "right");
+    shadowText(ctx, `EN PIE ${alive}/${v.balls.length}`, BW - 5, 5, [255, 220, 60], SMALL, "right");
     // Victorias acumuladas
     v.balls.forEach((_, i) => {
       const w = v.wins[i] ?? 0;
       const y = 17 + i * 9;
-      fillCircle(ctx, BW - 40, y + 3.5, 3, PLAYER_COLORS[i]);
-      text(ctx, String(i + 1), BW - 40, y + 3.7, [0, 0, 0], "bold 5px Arial, sans-serif", "center", "middle");
-      shadowText(`${w}`, BW - 5, y, [235, 235, 245], TINY, "right");
-      if (i === v.me) shadowText("tú", BW - 33, y, [235, 235, 245], TINY);
+      badge(ctx, BW - 40, y + 3.5, 3.5, PLAYER_COLORS[i], String(i + 1));
+      shadowText(ctx, `★${w}`, BW - 5, y, [255, 220, 60], TINY, "right");
+      if (i === v.me) shadowText(ctx, "TÚ", BW - 34, y, [235, 235, 245], TINY);
     });
 
     const me = v.balls[v.me];
-    // Embestida lista (barra)
+    // Embestida lista (barra por segmentos; parpadea cuando está cargada)
     if (me && me.state === 0 && v.phase === 1) {
       const k = 1 - me.dashCool / DASH_COOLDOWN;
-      ctx.fillStyle = "rgba(0,0,0,0.5)";
-      ctx.fillRect(5, BH - 22, 44, 6);
-      ctx.fillStyle = k >= 1 ? css(PLAYER_COLORS[v.me]) : "rgba(200,200,210,0.7)";
-      ctx.fillRect(6, BH - 21, 42 * k, 4);
-      shadowText("EMBESTIDA", 5, BH - 31, [235, 235, 245], TINY);
+      const ready = k >= 1;
+      segmentBar(ctx, 6, BH - 22, 44, 5, k, ready ? PLAYER_COLORS[v.me] : [200, 200, 210], 8);
+      const blink = !ready || Math.floor(this.time * 3) % 2 === 0;
+      if (blink) shadowText(ctx, ready ? "EMBESTIDA ¡LISTA!" : "EMBESTIDA", 5, BH - 31, ready ? [255, 230, 90] : [235, 235, 245], TINY);
     }
 
     // Encima del texto de ayuda para no pisarse en pantallas estrechas.
-    if (v.netLabel) shadowText(v.netLabel, BW - 4, BH - 20, [200, 200, 220], TINY, "right");
-    if (v.footer && !v.results) shadowText(v.footer, BW / 2, BH - 10, [235, 235, 245], TINY, "center");
+    if (v.netLabel) shadowText(ctx, v.netLabel, BW - 4, BH - 20, [200, 200, 220], TINY, "right");
+    if (v.footer && !v.results) shadowText(ctx, v.footer, BW / 2, BH - 10, [235, 235, 245], TINY, "center");
 
     if (v.phase === 0) {
-      shadowText(String(Math.ceil(v.countdown)), BW / 2, 70, [255, 230, 80], "bold 40px Arial, sans-serif", "center");
+      titleText(ctx, String(Math.ceil(v.countdown)), BW / 2, 66, [255, 230, 80], "40px");
     } else if (v.phase === 1 && v.time < 0.8) {
-      shadowText("¡YA!", BW / 2, 70, [120, 255, 120], "bold 34px Arial, sans-serif", "center");
+      titleText(ctx, "¡YA!", BW / 2, 70, [120, 255, 120], "32px");
     } else if (v.phase === 1 && v.time > SHRINK_START && v.time < SHRINK_START + 2.5) {
-      shadowText("¡La plataforma se encoge!", BW / 2, 58, [255, 200, 120], MID, "center");
+      titleText(ctx, "¡LA PLATAFORMA SE DESMORONA!", BW / 2, 58, [255, 200, 120], MID);
     }
     const outAt = this.outAt.get(v.me);
     if (me && me.state !== 0 && !v.results) {
       const recent = outAt === undefined || this.time - outAt < 2;
-      shadowText(recent ? "¡A LA LAVA!" : "Eliminado · mirando", BW / 2, 40, [255, 140, 80], recent ? "bold 16px Arial, sans-serif" : SMALL, "center");
+      if (recent) titleText(ctx, "¡A LA LAVA!", BW / 2, 40, [255, 140, 80], "16px");
+      else shadowText(ctx, "Eliminado · mirando", BW / 2, 40, [255, 140, 80], SMALL, "center");
     }
     if (v.results) this.drawResults(ctx, v);
   }
@@ -401,27 +505,18 @@ export class BallsRenderer {
       ? (v.balls[0].state === 0 ? "¡AGUANTASTE!" : `AGUANTASTE ${Math.floor(v.time)} s`)
       : winners.length === 1 ? `¡GANA ${ballName(winners[0].index, winners[0].ai).toUpperCase()}!` : "¡EMPATE!";
     const titleColor: RGB = winners.length === 1 && !solo ? PLAYER_COLORS[winners[0].index] : [235, 235, 245];
-    ctx.fillStyle = "rgba(0,0,0,0.7)";
-    ctx.fillRect(20, 40, BW - 40, 46 + res.length * 16);
-    text(ctx, title, BW / 2, 47, titleColor, MID, "center");
+    panel(ctx, 20, 40, BW - 40, 46 + res.length * 16, [255, 61, 139], 0.85);
+    titleText(ctx, title, BW / 2, 46, titleColor, MID);
     text(ctx, "Victorias", BW - 30, 63, [170, 170, 190], TINY, "right");
     res.forEach((r, i) => {
       const y = 72 + i * 16;
       const color = PLAYER_COLORS[r.index];
-      fillCircle(ctx, 36, y + 5, 5, color);
-      text(ctx, String(r.index + 1), 36, y + 5.3, [0, 0, 0], "bold 7px Arial, sans-serif", "center", "middle");
+      badge(ctx, 36, y + 4.5, 5, color, String(r.index + 1));
       text(ctx, `${r.place}º`, 46, y, [255, 255, 255], MID);
       text(ctx, ballName(r.index, r.ai) + (r.index === v.me ? " (tú)" : ""), 66, y, color, MID);
       text(ctx, String(v.wins[r.index] ?? 0), BW - 30, y, [255, 220, 60], MID, "right");
     });
-    text(ctx, v.footer, BW / 2, 76 + res.length * 16, [235, 235, 245], SMALL, "center");
+    const lit = Math.floor(this.time * 2) % 2 === 0; // parpadea como un "PULSA START"
+    text(ctx, fitText(ctx, v.footer, BW - 48, TINY), BW / 2, 77 + res.length * 16, lit ? [255, 236, 190] : [140, 130, 105], TINY, "center");
   }
-}
-
-function blend(c: number, to: RGB, a: number): number {
-  const r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255;
-  return ((255 << 24) |
-    (((b * (256 - a) + to[2] * a) >> 8) << 16) |
-    (((g * (256 - a) + to[1] * a) >> 8) << 8) |
-    ((r * (256 - a) + to[0] * a) >> 8)) >>> 0;
 }

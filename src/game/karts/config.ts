@@ -3,14 +3,18 @@
 // --- Pantalla (resolución interna estilo SNES; se escala al lienzo) ---
 export const KW = 256;
 export const KH = 224;
-export const HORIZON = 70; // fila del horizonte
 
-// --- Cámara modo 7 ---
+// --- Cámara 3D: detrás del kart, sigue la dirección de avance y el relieve ---
+export const FOV = 73; // campo de visión vertical (grados)
 export const CAM_HEIGHT = 24; // altura sobre el suelo (unidades de mundo)
-export const CAM_DIST = 30; // distancia detrás del kart
-export const FOCAL = 150; // distancia focal en píxeles
+export const CAM_DIST = 36; // distancia detrás del kart
+export const CAM_LOOK = 40; // mira a este punto por delante del kart
 export const FOG_START = 350;
-export const FOG_END = 1100;
+export const FOG_END = 1500;
+
+// --- Relieve (solo visual: la física sigue siendo plana) ---
+export const TERRAIN_MARGIN = 512; // el relieve se extiende más allá de la textura
+export const TERRAIN_SEG = 160; // casillas por lado de la rejilla de alturas
 
 // --- Circuito ---
 export const TEX = 1536; // la textura del circuito mide TEX×TEX unidades (1 px = 1 unidad)
@@ -34,6 +38,12 @@ export const STEER_RATE = 2.5; // rad/s a velocidad de agarre completa
 export const HOP_TIME = 0.16; // saltito al pulsar derrape
 export const HOP_HEIGHT = 4;
 export const DRIFT_MIN_SPEED = 75;
+// Giro derrapando, en fracción de STEER_RATE: sin tocar el volante, cerrando la curva y abriéndola.
+export const DRIFT_TURN = 0.62;
+export const DRIFT_TURN_IN = 0.95;
+export const DRIFT_TURN_OUT = 0.32;
+export const DRIFT_FOLLOW = 4.5; // lo rápido que la dirección de avance sigue al morro derrapando (1/s)
+export const DRIFT_MAX_SLIP = 0.45; // ángulo máximo entre morro y dirección de avance (~26°)
 export const MINI_TURBO_1 = 0.8; // segundos derrapando para chispas azules
 export const MINI_TURBO_2 = 1.7; // ... y naranjas
 export const MINI_TURBO_TIME_1 = 0.45;

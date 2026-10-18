@@ -5,7 +5,7 @@ import type { GuestGame, HostGame, NetFrame } from "../net/types";
 import { ITEM_NONE, ITEM_TURBO, KH, KW, RACERS, SPIN_TIME, TURBO_TIME, type ItemKind } from "./config";
 import { bump, makeKart, stepKart, type Kart } from "./physics";
 import { Race, type KartMsg, type SlotKind } from "./race";
-import { Mode7Renderer, type KartSprite, type RaceView, type Standing } from "./render";
+import { KartsRenderer, type KartSprite, type RaceView, type Standing } from "./render";
 import { generateTrack, type Track } from "./track";
 
 const r1 = (v: number) => Math.round(v * 10) / 10;
@@ -35,7 +35,7 @@ export class KartsHost implements HostGame {
   netLabel = "";
   race: Race;
   private seq = 0;
-  private readonly renderer = new Mode7Renderer();
+  private readonly renderer = new KartsRenderer();
   private kinds: SlotKind[];
 
   constructor(
@@ -65,7 +65,7 @@ export class KartsHost implements HostGame {
     if (code === "KeyR") this.newRace();
   }
 
-  draw(ctx: CanvasRenderingContext2D) {
+  draw(ctx: CanvasRenderingContext2D, pixelScale = 1) {
     const race = this.race;
     const me = race.slots[0];
     const view: RaceView = {
@@ -86,7 +86,7 @@ export class KartsHost implements HostGame {
       netLabel: this.netLabel,
       footer: race.phase === 2 ? "R: nueva carrera · J: cambiar juego · Esc: menú" : race.time < 6 ? HINT : "",
     };
-    this.renderer.draw(ctx, view);
+    this.renderer.draw(ctx, view, pixelScale);
   }
 
   frame(): NetFrame {
@@ -136,7 +136,7 @@ export class KartsGuest implements GuestGame {
   private track: Track | null = null;
   private me: Kart | null = null;
   private state: KartsSnap | null = null;
-  private readonly renderer = new Mode7Renderer();
+  private readonly renderer = new KartsRenderer();
   private lastSpinSeq = 0;
   private useCount = 0;
   private usedItem = 0;
@@ -229,7 +229,7 @@ export class KartsGuest implements GuestGame {
     return msg;
   }
 
-  draw(ctx: CanvasRenderingContext2D) {
+  draw(ctx: CanvasRenderingContext2D, pixelScale = 1) {
     const s = this.state;
     const me = this.me;
     const track = this.track;
@@ -259,7 +259,7 @@ export class KartsGuest implements GuestGame {
       netLabel: this.netLabel,
       footer: s.ph === 2 ? "Esperando al anfitrión · Esc: menú" : s.t < 6 ? HINT : "",
     };
-    this.renderer.draw(ctx, view);
+    this.renderer.draw(ctx, view, pixelScale);
   }
 }
 

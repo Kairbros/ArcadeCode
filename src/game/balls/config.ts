@@ -3,12 +3,12 @@
 // --- Pantalla (misma resolución interna que Karts) ---
 export const BW = 256;
 export const BH = 224;
-export const HORIZON = 34; // fila del horizonte
 
-// --- Cámara modo 7: fija al sur de la arena, alta y mirando al norte ---
-export const FOCAL = 150;
-export const CAM_HEIGHT = 88; // altura sobre la plataforma
-export const CAM_DIST = 195; // distancia al centro de la arena
+// --- Cámara 3D: fija al sur de la arena, alta y mirando hacia abajo al norte ---
+export const FOV = 73; // campo de visión vertical (grados)
+export const CAM_HEIGHT = 75; // altura sobre la plataforma
+export const CAM_DIST = 155; // distancia al centro de la arena
+export const CAM_PITCH = -0.6; // inclinación hacia abajo (radianes)
 export const CAM_FOLLOW = 0.25; // cuánto se desplaza de lado siguiendo al jugador
 export const LAVA_DROP = 20; // la lava está esta altura por debajo de la plataforma
 

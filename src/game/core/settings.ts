@@ -6,12 +6,13 @@ interface VsCodeApi {
 }
 declare function acquireVsCodeApi(): VsCodeApi;
 
-const injected = (window as { BOMBERMAN_CONFIG?: { grayscale?: boolean; playerName?: string; bots?: boolean } })
-  .BOMBERMAN_CONFIG;
+const injected = (window as { ARCADE_CONFIG?: { grayscale?: boolean; playerName?: string; bots?: boolean; crt?: boolean } })
+  .ARCADE_CONFIG;
 const vscodeApi: VsCodeApi | null = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null;
 const STORAGE_KEY = "bomberman.grayscale";
 const NAME_KEY = "bomberman.playerName";
 const BOTS_KEY = "bomberman.bots";
+const CRT_KEY = "arcade.crt";
 export const MAX_NAME = 12;
 
 /** Nombre de jugador seguro: sin caracteres de control y como mucho MAX_NAME caracteres. */
@@ -46,9 +47,32 @@ function loadBots(): boolean {
   }
 }
 
-export const settings = { grayscale: loadGrayscale(), name: loadName(), bots: loadBots() };
+function loadCrt(): boolean {
+  if (injected?.crt !== undefined) return injected.crt;
+  try {
+    return localStorage.getItem(CRT_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
 
-/** Bots (IA) que rellenan los huecos en Karts y Sumo de bolas. En red vale el ajuste del anfitrión. */
+export const settings = { grayscale: loadGrayscale(), name: loadName(), bots: loadBots(), crt: loadCrt() };
+
+/** Efecto de pantalla de tubo (líneas de barrido y bordes oscuros) encima del juego. */
+export function setCrt(on: boolean) {
+  settings.crt = on;
+  if (vscodeApi) {
+    vscodeApi.postMessage({ type: "setCrt", value: on });
+  } else {
+    try {
+      localStorage.setItem(CRT_KEY, on ? "1" : "0");
+    } catch {
+      // sin almacenamiento: solo dura esta sesión
+    }
+  }
+}
+
+/** Bots (IA) que rellenan los huecos en Karts, Sumo y Monigotes (y el crupier de la Ruleta). En red vale el del anfitrión. */
 export function setBots(on: boolean) {
   settings.bots = on;
   if (vscodeApi) {

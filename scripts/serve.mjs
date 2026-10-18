@@ -91,7 +91,7 @@ http
       .flat()
       .filter((i) => i && i.family === "IPv4" && !i.internal)
       .map((i) => `http://${i.address}:${port}`);
-    console.log(`\n  Bomberman en http://localhost:${port}`);
+    console.log(`\n  Arcade en http://localhost:${port}`);
     for (const url of lan) console.log(`  En tu red:   ${url}`);
     console.log("");
   });

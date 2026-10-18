@@ -6,7 +6,7 @@
 // así la misma semilla da siempre el mismo circuito.
 //
 // La línea central (puntos equiespaciados) sirve para colisiones, vueltas e IA;
-// la textura (pintada con Canvas) es lo que se ve en modo 7.
+// el dibujo del suelo (pintado con Canvas) se pone sobre el relieve 3D (terrain.ts).
 import type { RGB } from "../core/config";
 import { css } from "../core/draw";
 import { Rng } from "../core/rng";
@@ -70,9 +70,7 @@ export interface Track {
   boxes: { x: number; y: number }[];
   grid: StartSlot[];
   decos: Deco[];
-  hills: Uint8Array; // silueta del horizonte (512 columnas para 360°)
-  hillsFar: Uint8Array;
-  texture: Uint32Array | null; // se pinta bajo demanda (necesita DOM)
+  canvas: HTMLCanvasElement | null; // dibujo del suelo: se pinta bajo demanda (necesita DOM)
   attempts: number; // intentos que necesitó el generador (0 = óvalo de emergencia)
 }
 
@@ -397,25 +395,7 @@ export function generateTrack(seed: number): Track {
 
   const theme = rng.choice(THEMES);
   const decos = placeDecos(rng, { n, px, py, dir }, theme);
-
-  const skyline = (amp: number, freqs: number[]) => {
-    const phases = freqs.map(() => rng.next() * Math.PI * 2);
-    const out = new Uint8Array(512);
-    for (let x = 0; x < 512; x++) {
-      let h = 0;
-      freqs.forEach((f, i) => (h += Math.sin((x / 512) * Math.PI * 2 * f + phases[i]) / (i + 1)));
-      out[x] = Math.max(0, Math.round(amp * (0.55 + 0.45 * h)));
-    }
-    return out;
-  };
-
-  return {
-    seed, n, px, py, dir, theme, boxes, grid, decos,
-    hills: skyline(16, [3, 7, 13]),
-    hillsFar: skyline(26, [2, 5]),
-    texture: null,
-    attempts,
-  };
+  return { seed, n, px, py, dir, theme, boxes, grid, decos, canvas: null, attempts };
 }
 
 /** Decoración junto a la pista (árboles, cactus...): fuera del asfalto y sin amontonarse. */
@@ -436,9 +416,9 @@ function placeDecos(rng: Rng, line: Centerline, theme: Theme): Deco[] {
   return decos;
 }
 
-/** Pinta el circuito en una textura TEX×TEX (formato del ImageData: ABGR en little-endian). */
-export function trackTexture(track: Track): Uint32Array {
-  if (track.texture) return track.texture;
+/** Pinta el suelo del circuito (hierba, arena, pianos, asfalto y meta) en un lienzo TEX×TEX. */
+export function trackCanvas(track: Track): HTMLCanvasElement {
+  if (track.canvas) return track.canvas;
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = TEX;
   const c = canvas.getContext("2d")!;
@@ -490,10 +470,8 @@ export function trackTexture(track: Track): Uint32Array {
     }
   }
   c.restore();
-
-  const data = c.getImageData(0, 0, TEX, TEX);
-  track.texture = new Uint32Array(data.data.buffer.slice(0));
-  return track.texture;
+  track.canvas = canvas;
+  return canvas;
 }
 
 export interface Location {

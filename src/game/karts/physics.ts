@@ -1,8 +1,9 @@
 // Física del kart. La usan el anfitrión (su kart y la IA) y cada invitado (su propio kart),
 // así cada uno conduce sin esperar a la red.
 import {
-  ACCEL, BRAKE, CURB_W, DRIFT_MIN_SPEED, FRICTION, HOP_TIME, KART_R, MAX_SPEED, MINI_TURBO_1, MINI_TURBO_2,
-  MINI_TURBO_TIME_1, MINI_TURBO_TIME_2, OFFROAD_MAX, REVERSE_MAX, STEER_RATE, TRACK_W, TURBO_SPEED, WALL_MARGIN,
+  ACCEL, BRAKE, CURB_W, DRIFT_FOLLOW, DRIFT_MAX_SLIP, DRIFT_MIN_SPEED, DRIFT_TURN, DRIFT_TURN_IN, DRIFT_TURN_OUT,
+  FRICTION, HOP_TIME, KART_R, MAX_SPEED, MINI_TURBO_1, MINI_TURBO_2, MINI_TURBO_TIME_1, MINI_TURBO_TIME_2,
+  OFFROAD_MAX, REVERSE_MAX, STEER_RATE, TRACK_W, TURBO_SPEED, WALL_MARGIN,
 } from "./config";
 import { locate, type StartSlot, type Track } from "./track";
 
@@ -71,12 +72,19 @@ export function stepKart(k: Kart, input: DriveInput, track: Track, dt: number, c
   const grip = Math.max(-1, Math.min(1, k.v / 70));
   if (k.drift) {
     // Derrapando gira siempre hacia su lado: hacia dentro cierra la curva, hacia fuera la abre.
-    k.a += k.drift * STEER_RATE * (0.75 + 0.5 * steer * k.drift) * grip * dt;
+    const into = steer * k.drift; // 1 cerrando, -1 abriendo
+    const turn = into >= 0 ? DRIFT_TURN + (DRIFT_TURN_IN - DRIFT_TURN) * into : DRIFT_TURN + (DRIFT_TURN - DRIFT_TURN_OUT) * into;
+    k.a += k.drift * STEER_RATE * turn * grip * dt;
   } else {
     k.a += steer * STEER_RATE * grip * dt;
   }
-  // La dirección de avance persigue al morro: rápido con agarre, despacio derrapando (el kart va cruzado).
-  if (k.spin <= 0) k.ma += wrapAngle(k.a - k.ma) * Math.min(1, dt * (k.drift ? 2 : 14));
+  // La dirección de avance persigue al morro: enseguida con agarre y algo más despacio derrapando,
+  // así el kart va un poco cruzado (como mucho DRIFT_MAX_SLIP).
+  if (k.spin <= 0) {
+    k.ma += wrapAngle(k.a - k.ma) * Math.min(1, dt * (k.drift ? DRIFT_FOLLOW : 14));
+    const slip = wrapAngle(k.a - k.ma);
+    if (k.drift && Math.abs(slip) > DRIFT_MAX_SLIP) k.ma = k.a - Math.sign(slip) * DRIFT_MAX_SLIP;
+  }
   k.x += Math.cos(k.ma) * k.v * dt;
   k.y += Math.sin(k.ma) * k.v * dt;
   collideDecos(k, track);

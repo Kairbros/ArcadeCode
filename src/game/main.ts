@@ -10,13 +10,16 @@ import { BallsHost } from "./balls/game";
 import { BallsInput } from "./balls/input";
 import { StickHost } from "./stick/game";
 import { StickInput } from "./stick/input";
+import { RuletaHost } from "./ruleta/game";
+import { RuletaInput } from "./ruleta/input";
 import { Keyboard, isTyping } from "./core/keyboard";
 import { GuestSession } from "./net/guest";
 import { HostSession } from "./net/host";
 import { TRANSPORT_LABEL } from "./net/protocol";
 import { SignalClient } from "./net/signaling";
 import { css } from "./core/draw";
-import { onSettingsChange, setBots, setGrayscale, setPlayerName, settings } from "./core/settings";
+import { drawCrt } from "./core/crt";
+import { onSettingsChange, setBots, setCrt, setGrayscale, setPlayerName, settings } from "./core/settings";
 import { defaultName, myName, resetNames, setName } from "./core/names";
 import { Menu } from "./ui/menu";
 
@@ -26,19 +29,19 @@ const ctx = canvas.getContext("2d")!;
 // Teclas cuyo comportamiento por defecto (scroll, etc.) se anula mientras se juega.
 const captured = new Set([
   ...PLAYER_CONTROLS.flatMap((s) => [...s.up, ...s.down, ...s.left, ...s.right, ...s.bomb]),
-  "ShiftRight", "KeyC", "KeyE",
+  "ShiftRight", "KeyC", "KeyE", "Backspace",
 ]);
 const keyboard = new Keyboard(window, captured);
 const menu = new Menu();
 
 // --- Servidor de emparejamiento ---
-// En la web se usa la propia URL; en VS Code la inyecta la extensión (ajuste bomberman.serverUrl).
-const injected = (window as { BOMBERMAN_CONFIG?: { serverUrl?: string } }).BOMBERMAN_CONFIG;
+// En la web se usa la propia URL; en VS Code la inyecta la extensión (ajuste arcade.serverUrl).
+const injected = (window as { ARCADE_CONFIG?: { serverUrl?: string } }).ARCADE_CONFIG;
 let signalUrl: string | null = null;
 let onlineError: string | null = null;
 if (injected) {
   if (injected.serverUrl) signalUrl = injected.serverUrl.replace(/\/$/, "") + "/api/signal";
-  else onlineError = "Configura el ajuste «bomberman.serverUrl» de VS Code con la URL de tu despliegue.";
+  else onlineError = "Configura el ajuste «arcade.serverUrl» de VS Code con la URL de tu despliegue.";
 } else if (location.protocol.startsWith("http")) {
   signalUrl = new URL("api/signal", location.href).href;
 } else {
@@ -83,11 +86,16 @@ function showMain(error = "") {
         setBots(!settings.bots);
         return settings.bots;
       },
+      toggleCrt: () => {
+        setCrt(!settings.crt);
+        return settings.crt;
+      },
     },
     onlineError,
     settings.grayscale,
     settings.name,
     settings.bots,
+    settings.crt,
     error,
   );
 }
@@ -130,7 +138,7 @@ function startLocal(id: GameId) {
     // Un jugador contra la IA; vale WASD o flechas.
     const game = new KartsHost(new KartsInput(keyboard), 0, "local", settings.bots);
     play({
-      size: game.size, update: (dt) => game.update(dt), draw: (c) => game.draw(c), key: (code) => game.key(code),
+      size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,
     });
     return;
@@ -144,11 +152,20 @@ function startLocal(id: GameId) {
     });
     return;
   }
+  if (id === "ruleta") {
+    // Tú contra el crupier, como en el original.
+    const game = new RuletaHost(new RuletaInput(keyboard), 0, "local", settings.bots);
+    play({
+      size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
+      get finished() { return game.finished; }, switchGame: startLocal,
+    });
+    return;
+  }
   if (id === "balls") {
     // Un jugador contra tres bolas de la IA.
     const game = new BallsHost(new BallsInput(keyboard), 0, "local", settings.bots);
     play({
-      size: game.size, update: (dt) => game.update(dt), draw: (c) => game.draw(c), key: (code) => game.key(code),
+      size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,
     });
     return;
@@ -275,6 +292,7 @@ function frame(now: number) {
   if (screen) {
     screen.update(dt);
     screen.draw(ctx, pixelScale);
+    if (settings.crt) drawCrt(ctx, pixelScale);
   } else {
     ctx.fillStyle = css(BG_COLOR);
     ctx.fillRect(0, 0, size[0], size[1]);

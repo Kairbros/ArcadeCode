@@ -11,7 +11,7 @@ import { Rng } from "../../core/rng";
 import { settings } from "../../core/settings";
 import {
   css, fillCircle, fillEllipse, fillRect, line, roundRect, shade, strokeCircle, strokeEllipse, strokeRect,
-  text, type Ctx,
+  text, titleText, type Ctx,
 } from "../../core/draw";
 import { drawIcon } from "./icons";
 
@@ -215,13 +215,7 @@ export class Renderer {
     if (settings.grayscale && player && !dying) {
       const label = String(player.index + 1);
       const ly = cy - rad * 1.5 - 13;
-      ctx.font = "bold 15px Arial, sans-serif";
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = "rgb(0,0,0)";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.strokeText(label, x, ly);
-      text(ctx, label, x, ly, [255, 255, 255], "bold 15px Arial, sans-serif", "center", "middle");
+      titleText(ctx, label, x, ly, [255, 255, 255], "16px", "center", "middle");
     }
   }
 

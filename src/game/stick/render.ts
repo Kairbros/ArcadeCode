@@ -1,7 +1,9 @@
 // Render de Monigotes: escenario lateral fijo y luchadores dibujados con líneas. Las poses
 // (correr, saltar, golpear, aturdido, inerte) se calculan a partir del estado: no hay sprites.
 import { PLAYER_COLORS, PLAYER_NAMES, type RGB } from "../core/config";
-import { css, fillCircle, roundRect, shade, text, type Ctx } from "../core/draw";
+import {
+  badge, css, fillCircle, fitText, panel, roundRect, segmentBar, shade, shadowText, text, titleText, type Ctx,
+} from "../core/draw";
 import {
   ATTACK_ANIM, BOMB_FUSE, BOMB_RADIUS, EXPLOSION_TIME, HP, ROUND_TIME, SH, SW, W_BOMB, W_PISTOL, W_SWORD,
   type Weapon,
@@ -195,8 +197,7 @@ export class StickRenderer {
     if (!f.dead) {
       // Número sobre la cabeza (identifica también en escala de grises) y marca propia.
       const ty = f.y - 38;
-      text(ctx, String(f.index + 1), f.x, ty, [0, 0, 0], "bold 7px Arial, sans-serif", "center", "middle");
-      text(ctx, String(f.index + 1), f.x, ty - 0.5, [255, 255, 255], "bold 7px Arial, sans-serif", "center", "middle");
+      shadowText(ctx, String(f.index + 1), f.x, ty, [255, 255, 255], "7px", "center", "middle");
       if (mine) {
         ctx.fillStyle = "#fff";
         ctx.beginPath();
@@ -239,46 +240,37 @@ export class StickRenderer {
 
   // --- HUD ---
   private drawHud(ctx: Ctx, v: StickView) {
-    const shadowText = (str: string, x: number, y: number, color: RGB, font: string, align: CanvasTextAlign = "left") => {
-      text(ctx, str, x + 0.7, y + 0.7, [0, 0, 0], font, align);
-      text(ctx, str, x, y, color, font, align);
-    };
-    // Paneles de vida, uno por luchador.
+    // Paneles de vida, uno por luchador, como en las recreativas de lucha.
     const n = v.fighters.length;
     const pw = Math.min(78, (SW - 8) / n);
     v.fighters.forEach((f, i) => {
       const x = 4 + i * pw;
       const color = PLAYER_COLORS[f.index];
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fillRect(x, 3, pw - 4, 16);
-      fillCircle(ctx, x + 6, 11, 4, color);
-      text(ctx, String(f.index + 1), x + 6, 11.3, [0, 0, 0], "bold 6px Arial, sans-serif", "center", "middle");
+      panel(ctx, x, 2, pw - 4, 18, f.dead ? [90, 90, 100] : color, 0.6);
+      badge(ctx, x + 6.5, 11, 4, f.dead ? [110, 110, 120] : color, String(f.index + 1));
       const name = fighterName(f.index, v.aiSlots[i]) + (f.index === v.me ? " (tú)" : "");
-      text(ctx, name, x + 12, 4, f.dead ? [150, 150, 160] : [235, 235, 245], TINY);
-      text(ctx, `★${v.wins[f.index] ?? 0}`, x + pw - 6, 4, [255, 220, 60], TINY, "right");
-      const bw = pw - 18;
-      ctx.fillStyle = "rgba(255,255,255,0.15)";
-      ctx.fillRect(x + 12, 12, bw, 4);
+      text(ctx, fitText(ctx, name, pw - 34, TINY), x + 13, 3.5, f.dead ? [150, 150, 160] : [235, 235, 245], TINY);
+      text(ctx, `★${v.wins[f.index] ?? 0}`, x + pw - 7, 3.5, [255, 220, 60], TINY, "right");
       const k = Math.max(0, f.hp) / HP;
-      ctx.fillStyle = f.dead ? "rgba(120,120,120,0.6)" : css(k > 0.5 ? [110, 220, 110] : k > 0.25 ? [250, 200, 70] : [240, 80, 70]);
-      ctx.fillRect(x + 12, 12, bw * k, 4);
+      const hpColor: RGB = f.dead ? [120, 120, 120] : k > 0.5 ? [110, 220, 110] : k > 0.25 ? [250, 200, 70] : [240, 80, 70];
+      segmentBar(ctx, x + 13, 12, pw - 21, 4, k, hpColor, 10);
     });
     const left = Math.max(0, Math.ceil(ROUND_TIME - v.time));
-    shadowText(String(left), SW / 2, 22, left <= 10 ? [255, 120, 100] : [255, 255, 255], SMALL, "center");
+    titleText(ctx, String(left), SW / 2, 22, left <= 10 ? [255, 120, 100] : [255, 255, 255], "10px");
 
-    if (v.netLabel) shadowText(v.netLabel, SW - 3, SH - 17, [200, 200, 220], TINY, "right");
-    if (v.footer && !v.results) shadowText(v.footer, SW / 2, SH - 9, [235, 235, 245], TINY, "center");
+    if (v.netLabel) shadowText(ctx, v.netLabel, SW - 3, SH - 17, [200, 200, 220], TINY, "right");
+    if (v.footer && !v.results) shadowText(ctx, v.footer, SW / 2, SH - 9, [235, 235, 245], TINY, "center");
 
     if (v.phase === 0) {
-      shadowText(String(Math.ceil(v.countdown)), SW / 2, 60, [255, 230, 80], "bold 34px Arial, sans-serif", "center");
+      titleText(ctx, String(Math.ceil(v.countdown)), SW / 2, 58, [255, 230, 80], "36px");
     } else if (v.phase === 1 && v.time < 0.8) {
-      shadowText("¡A PELEAR!", SW / 2, 64, [120, 255, 120], "bold 22px Arial, sans-serif", "center");
+      titleText(ctx, "¡A PELEAR!", SW / 2, 64, [120, 255, 120], "22px");
     }
     const me = v.fighters[v.me];
-    if (me?.dead && !v.results) shadowText("K.O. · mirando", SW / 2, 34, [255, 140, 80], SMALL, "center");
+    if (me?.dead && !v.results) shadowText(ctx, "K.O. · mirando", SW / 2, 34, [255, 140, 80], SMALL, "center");
     if (me && !me.dead && me.weapon) {
       const label = me.weapon === W_SWORD ? "Espada" : me.weapon === W_PISTOL ? `Pistola ${me.ammo}` : `Bombas ${me.ammo}`;
-      shadowText(label, 4, SH - 17, [235, 235, 245], TINY);
+      shadowText(ctx, label, 4, SH - 17, [235, 235, 245], TINY);
     }
     if (v.results) this.drawResults(ctx, v);
   }
@@ -292,20 +284,19 @@ export class StickRenderer {
       : winners.length === 1 ? `¡GANA ${fighterName(winners[0].index, winners[0].ai).toUpperCase()}!` : "¡EMPATE!";
     const titleColor: RGB = winners.length === 1 && !solo ? PLAYER_COLORS[winners[0].index] : [235, 235, 245];
     const top = 40;
-    ctx.fillStyle = "rgba(0,0,0,0.72)";
-    ctx.fillRect(50, top, SW - 100, 40 + res.length * 14);
-    text(ctx, title, SW / 2, top + 6, titleColor, MID, "center");
+    panel(ctx, 50, top, SW - 100, 40 + res.length * 14, [255, 61, 139], 0.85);
+    titleText(ctx, title, SW / 2, top + 5, titleColor, MID);
     text(ctx, "Victorias", SW - 60, top + 20, [170, 170, 190], TINY, "right");
     res.forEach((r, i) => {
       const y = top + 28 + i * 14;
       const color = PLAYER_COLORS[r.index];
-      fillCircle(ctx, 64, y + 4, 4, color);
-      text(ctx, String(r.index + 1), 64, y + 4.3, [0, 0, 0], "bold 6px Arial, sans-serif", "center", "middle");
+      badge(ctx, 64, y + 4, 4, color, String(r.index + 1));
       text(ctx, `${r.place}º`, 72, y, [255, 255, 255], MID);
       text(ctx, fighterName(r.index, r.ai) + (r.index === v.me ? " (tú)" : ""), 90, y, color, MID);
       text(ctx, String(v.wins[r.index] ?? 0), SW - 60, y, [255, 220, 60], MID, "right");
     });
-    text(ctx, v.footer, SW / 2, top + 32 + res.length * 14, [235, 235, 245], SMALL, "center");
+    const lit = Math.floor(this.time * 2) % 2 === 0; // parpadea como un "PULSA START"
+    text(ctx, fitText(ctx, v.footer, SW - 108, TINY), SW / 2, top + 31 + res.length * 14, lit ? [255, 236, 190] : [140, 130, 105], TINY, "center");
   }
 }
 
