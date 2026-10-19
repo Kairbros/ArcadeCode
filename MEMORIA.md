@@ -1,4 +1,4 @@
-# Memoria del proyecto: Arcade (Bomberman, Karts, Sumo de bolas, Monigotes y Ruleta de cartuchos)
+# Memoria del proyecto: Arcade (Bomberman, Karts, Sumo de bolas, Monigotes, Ruleta de cartuchos y Bloques)
 
 Guía para quien vaya a extender el proyecto (persona o agente). Resume decisiones, contratos, despliegue
 y trampas conocidas. El README cubre el uso; este documento, el porqué y el cómo extender.
@@ -8,7 +8,8 @@ y trampas conocidas. El README cubre el uso; este documento, el porqué y el có
 - Hub de juegos multijugador en TypeScript + Canvas 2D. Se juega en el navegador o dentro de VS Code
   (vista "Arcade" en el Explorador). Juegos: **Bomberman**, **Karts** (3D con relieve),
   **Sumo de bolas** (3D), **Monigotes** (peleas en plataformas) y **Ruleta de cartuchos**
-  (escopeta por turnos contra un crupier, en 3D; inspirado en un juego indie, con nombre propio).
+  (escopeta por turnos contra un crupier, en 3D; inspirado en un juego indie, con nombre propio) y
+  **Bloques** (mundo de bloques en primera persona tipo Minecraft, con nombre propio; de momento creativo).
 - **Pantalla muy pequeña**: se juega sobre todo en la barra lateral de VS Code (~180–300 px de ancho).
   Todo el UI (menú, HUD) debe funcionar ahí. El lienzo escala el tamaño lógico del juego.
 - **Red corporativa**: los equipos de la oficina pueden no verse entre sí. Por eso la conexión es
@@ -84,6 +85,8 @@ src/game/core/three.ts     3D compartido: un solo WebGLRenderer (`glRenderer`), 
 src/game/stick/            config, stages, fight (física+armas+bots+árbitro), input, render (poses por código), game
 src/game/ruleta/           config, match (reglas+árbitro), bot, state (estado de red), input (teclas+selector),
                            math3d (vectores/giros), textures (generadas), models (Three.js), render (escena+HUD), game
+src/game/blocks/           config, blocks (tipos), world (generación+rayo+diff), mesher (chunks), player (física),
+                           pilot (jugador propio), atlas (texturas), input (teclado+ratón), render (Three.js+HUD), game
 ```
 
 ### Contrato de red (lo que un juego debe implementar) — `src/game/net/types.ts`
@@ -98,7 +101,7 @@ src/game/ruleta/           config, match (reglas+árbitro), bot, state (estado d
 - **Bots** (`settings.bots`, ajuste `arcade.bots`, botón del menú): con bots la IA rellena hasta 4 en Karts y
   Sumo; sin ellos solo juegan las personas (solo = contrarreloj / aguantar 60 s). En red vale el del anfitrión
   (`createHostGame`). Los enemigos de Bomberman no son bots: no les afecta. Afecta a Karts, Sumo y Monigotes;
-  en Ruleta de cartuchos sienta al crupier (un solo bot), que en solitario se sienta siempre.
+  en Ruleta de cartuchos sienta al crupier (un solo bot), que en solitario se sienta siempre. Bloques no tiene bots.
 - **Nombres** (`core/names.ts`): `PLAYER_NAMES` es mutable y los juegos lo leen al dibujar. El nombre se elige en el
   menú (ajuste `arcade.playerName` o localStorage, máx. 12). El invitado lo manda en `{t:"hello"}` (directo) y
   como campo `nm` en sus mensajes hasta verlo en `snap.n`, la lista que `HostSession.stamp` añade a cada estado.
@@ -239,6 +242,36 @@ src/game/ruleta/           config, match (reglas+árbitro), bot, state (estado d
 - Cámara en primera persona desde tu asiento; los asientos se reparten en círculo a partir de ti (`angleOf`).
 - Probado con simulación (300 partidas solo bots por tamaño: 2 jugadores ~3 min de mediana, 4 jugadores ~8;
   ninguna atascada; se usan los 9 objetos) y con capturas de escenas fijas en Edge sin ventana.
+
+## 6g. Bloques (claves) — base; se irá ampliando (inventario, crafteo...)
+
+- Mundo fijo de `WX×WY×WZ` = 96×48×96 en un `Uint8Array` (`world.ts`), generado desde la semilla con ruido de valor
+  fractal (`fbm`): llanura + colinas + montes (cima de piedra si h > 30), agua hasta `SEA` (17), arena solo en la
+  orilla y el fondo (h ≤ SEA), árboles por `hash3`. Roca madre en y = 0. Bordes: pared invisible (`solidAt`).
+  13 tipos en `blocks.ts` (`BLOCKS`: casillas del atlas arriba/lado/abajo, `solid`, `opaque`). La barra (`HOTBAR`) es
+  fija por ahora: el inventario y el crafteo vendrán después.
+- `world.diff` guarda los bloques distintos de los generados (para la base de red) y `world.dirty`, los chunks que
+  hay que rehacer. El jugador aparece en tierra seca (`dryColumn`, en espiral desde el centro).
+- Malla (`mesher.ts`, código puro): chunks de 16×48×16, solo caras visibles, oclusión ambiental por vértice
+  (`AO_LEVEL`) y luz fija por cara horneadas en el color del vértice. Cada cuadrado se parte por la diagonal de las
+  esquinas oscuras (al revés salían triángulos claros sueltos). El agua va aparte (transparente, superficie a 0,88).
+  ~4 ms por chunk; la carga inicial se reparte (`CHUNKS_PER_FRAME`) y los cambios se rehacen al momento.
+- Render: `MeshBasicMaterial` con el atlas (`NearestFilter`, sin mipmaps, `alphaTest` para hojas y cristal,
+  `toneMapped: false`): el mundo no usa luces ni sombras (barato). Solo los muñecos de los demás llevan luz.
+  Atlas 4×4 de 16 px dibujado píxel a píxel (`atlas.ts`). Icono isométrico de la barra: `drawBlockIcon`.
+  Son cubos de 1 m: encaja con la regla 6e (no son vóxeles finos).
+- Física (`player.ts`): caja de 0,6×1,8, eje a eje en pasos ≤ 0,45 y pegada a la cara al chocar; nado; vuelo (F).
+- Ratón: `pointer lock` al hacer clic en el lienzo (`input.ts`; las escuchas se enganchan una sola vez y no tocan el
+  DOM hasta el primer `poll`); `releasePointer` al abrir el menú o el selector. Sin ratón: flechas para mirar y Q/E.
+  **Sin probar aún en la webview de VS Code** (puede que no deje capturar el puntero; con las teclas se juega igual).
+- Red: cada uno mueve a su jugador (sin retraso). Cambios de bloques: el anfitrión los numera (`n`) en un registro y
+  cada estado lleva los últimos `EDITS_IN_SNAP` (`ed`). El invitado predice los suyos y los reenvía con su `k` hasta
+  verlo en `ak`; si le faltan cambios, usa la base (`{seq, n, d}` = diff completo, renovada como mucho cada
+  `REBASE_EVERY` s si hubo cambios). Mensaje `{t:"m",x,y,z,a,p,h,e,s}` ≤ ~160 caracteres. `finished` siempre es true.
+  La base crece ~16 caracteres por bloque cambiado (con el límite del relé de 200.000, unos 12.000 bloques).
+- Probado: simulación en Node de anfitrión + invitado editando al azar, por directo y por relé con pérdidas (mundos
+  idénticos al final y todo confirmado), y capturas en Edge sin ventana. SwiftShader va a ~3,5 fps: las pulsaciones
+  cortas se pierden ahí, así que en las pruebas hay que mantener las teclas ≥ 0,4 s.
 
 ## 6e. Estilo 3D: bloques simples (regla del usuario)
 
@@ -422,3 +455,5 @@ Pendiente o por decidir:
 - Ruleta: al apuntarte a ti mismo, tu mano queda grande delante de la cámara.
 - Ajustar el derrape a gusto del usuario cuando lo pruebe (constantes `DRIFT_*` en `karts/config.ts`).
 - Monigotes y Bomberman siguen en 2D; si se pasan a 3D, seguir la regla de bloques (6e) y usar `core/three.ts`.
+- Bloques: probar el ratón en la webview de VS Code y el rendimiento con gráfica real. Siguiente paso acordado con el
+  usuario: inventario y crafteo; después quizá supervivencia (vida, hambre, noche) o un modo Spleef con rondas.

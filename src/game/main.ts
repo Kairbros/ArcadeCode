@@ -12,6 +12,8 @@ import { StickHost } from "./stick/game";
 import { StickInput } from "./stick/input";
 import { RuletaHost } from "./ruleta/game";
 import { RuletaInput } from "./ruleta/input";
+import { BlocksHost } from "./blocks/game";
+import { BlocksInput, releasePointer } from "./blocks/input";
 import { Keyboard, isTyping } from "./core/keyboard";
 import { GuestSession } from "./net/guest";
 import { HostSession } from "./net/host";
@@ -29,7 +31,7 @@ const ctx = canvas.getContext("2d")!;
 // Teclas cuyo comportamiento por defecto (scroll, etc.) se anula mientras se juega.
 const captured = new Set([
   ...PLAYER_CONTROLS.flatMap((s) => [...s.up, ...s.down, ...s.left, ...s.right, ...s.bomb]),
-  "ShiftRight", "KeyC", "KeyE", "Backspace",
+  "ShiftRight", "KeyC", "KeyE", "Backspace", "KeyQ", "KeyF",
 ]);
 const keyboard = new Keyboard(window, captured);
 const menu = new Menu();
@@ -74,6 +76,7 @@ function showMain(error = "") {
   host = guest = null;
   screen = null;
   switching = false;
+  releasePointer(); // el menú se maneja con el ratón
   resetNames();
   menu.showMain(
     {
@@ -126,6 +129,7 @@ function resume() {
 /** Selector de juego sobre la partida terminada; la sala (si la hay) sigue abierta. */
 function showSwitch(s: Screen) {
   switching = true;
+  releasePointer();
   menu.showPicker("Cambiar de juego", (id) => {
     s.switchGame!(id);
     resume();
@@ -157,6 +161,15 @@ function startLocal(id: GameId) {
     const game = new RuletaHost(new RuletaInput(keyboard), 0, "local", settings.bots);
     play({
       size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
+      get finished() { return game.finished; }, switchGame: startLocal,
+    });
+    return;
+  }
+  if (id === "blocks") {
+    // Mundo propio para construir (en red se comparte el del anfitrión).
+    const game = new BlocksHost(new BlocksInput(keyboard), 0, "local");
+    play({
+      size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: () => game.key(),
       get finished() { return game.finished; }, switchGame: startLocal,
     });
     return;
