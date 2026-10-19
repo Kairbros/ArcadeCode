@@ -61,6 +61,8 @@ interface Screen {
   /** Partida terminada: con J se puede cambiar de juego (solo local y anfitrión). */
   readonly finished?: boolean;
   switchGame?(id: GameId): void;
+  /** Un panel abierto (inventario) que consume Esc: true si ya lo ha cerrado. */
+  escape?(): boolean;
 }
 const MENU_SIZE = DEFAULT_SIZE;
 const BOMBER_SIZE = [SCREEN_W, SCREEN_H] as const;
@@ -136,6 +138,24 @@ function showSwitch(s: Screen) {
   }, resume);
 }
 
+/** Bloques se juega en creativo o en supervivencia. */
+function chooseBlocksMode(then: (survival: boolean) => void) {
+  menu.showChoice("Bloques", "Elige cómo jugar", [
+    { label: "Supervivencia", note: "Vida, herramientas, objetos y fabricación" },
+    { label: "Creativo", note: "Bloques infinitos, sin daño y con vuelo" },
+  ], (i) => then(i === 0), () => showMain());
+}
+
+function startBlocksLocal(survival: boolean) {
+  setName(0, myName(0));
+  const game = new BlocksHost(new BlocksInput(keyboard), 0, "local", survival);
+  play({
+    size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
+    escape: () => game.escape(),
+    get finished() { return game.finished; }, switchGame: startLocal,
+  });
+}
+
 function startLocal(id: GameId) {
   setName(0, myName(0));
   if (id === "karts") {
@@ -167,11 +187,7 @@ function startLocal(id: GameId) {
   }
   if (id === "blocks") {
     // Mundo propio para construir (en red se comparte el del anfitrión).
-    const game = new BlocksHost(new BlocksInput(keyboard), 0, "local");
-    play({
-      size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: () => game.key(),
-      get finished() { return game.finished; }, switchGame: startLocal,
-    });
+    chooseBlocksMode((survival) => startBlocksLocal(survival));
     return;
   }
   if (id === "balls") {
@@ -196,7 +212,17 @@ function startLocal(id: GameId) {
 
 async function startHost(id: GameId) {
   if (!signal) return;
-  const session = new HostSession(signal, id);
+  // Bloques se juega en creativo o en supervivencia: se elige antes de abrir la sala.
+  if (id === "blocks") {
+    chooseBlocksMode((survival) => void openHost(id, survival));
+    return;
+  }
+  await openHost(id, false);
+}
+
+async function openHost(id: GameId, survival: boolean) {
+  if (!signal) return;
+  const session = new HostSession(signal, id, { blocksSurvival: survival });
   host = session;
   menu.showMessage("Creando sala...", "Contactando con el servidor de emparejamiento.");
   const refresh = () => {
@@ -215,6 +241,7 @@ async function startHost(id: GameId) {
       update: (dt) => session.update(dt),
       draw: (c, s) => session.game!.draw(c, s),
       key: (code) => session.game!.key(code),
+      escape: () => session.game?.escape?.() ?? false,
       get finished() { return session.game!.finished; },
       switchGame: (next) => session.switchGame(next),
     });
@@ -271,7 +298,9 @@ async function startJoin(code: string) {
 window.addEventListener("keydown", (ev) => {
   if (ev.repeat || isTyping(ev)) return;
   if (ev.code === "Escape" && switching) resume();
-  else if (ev.code === "Escape" && screen) showMain();
+  else if (ev.code === "Escape" && screen?.escape?.()) {
+    // El juego ha cerrado su panel (inventario): no se sale al menú.
+  } else if (ev.code === "Escape" && screen) showMain();
   else if (ev.code === "KeyG") toggleGray();
   else if (ev.code === "KeyJ" && !menu.visible && screen?.switchGame && screen.finished) showSwitch(screen);
   else if (!menu.visible) screen?.key?.(ev.code);

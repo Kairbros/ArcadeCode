@@ -3,7 +3,7 @@
 import { MAX_PLAYERS, PLAYER_NAMES, SNAPSHOT_HZ } from "../core/config";
 import { myName, resetNames, setName } from "../core/names";
 import { cleanName } from "../core/settings";
-import { createHostGame, type GameId } from "../hub";
+import { createHostGame, type GameId, type GameOptions } from "../hub";
 import type { Keyboard } from "../core/keyboard";
 import { TRANSPORT_LABEL, type HostMessage, type Transport } from "./protocol";
 import { RELAY_HZ, RELAY_MAX_IN_FLIGHT, RELAY_STALE_MS } from "./relay";
@@ -55,7 +55,7 @@ export class HostSession {
   private lastSeq = 0;
   private lastBase = 0;
 
-  constructor(private signal: SignalClient, public gameId: GameId) {}
+  constructor(private signal: SignalClient, public gameId: GameId, private opts: GameOptions = {}) {}
 
   async open() {
     ({ code: this.code, hostKey: this.hostKey } = await this.signal.create());
@@ -185,7 +185,7 @@ export class HostSession {
     this.seqOffset = this.lastSeq;
     this.baseOffset = this.lastBase;
     this.lastFrame = null;
-    const game = createHostGame(id, this.keyboard, this.peers.length);
+    const game = createHostGame(id, this.keyboard, this.peers.length, this.opts);
     // Quien se fue sigue fuera en el juego nuevo.
     for (const p of this.peers) if (!p.connected) game.onDisconnect(p.index);
     this.game = game;

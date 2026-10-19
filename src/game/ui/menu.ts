@@ -221,6 +221,24 @@ export class Menu {
     card.querySelector<HTMLButtonElement>('[data-a="back"]')!.onclick = onBack;
   }
 
+  /** Elegir entre dos o tres opciones (p. ej. el modo de Bloques). */
+  showChoice(title: string, body: string, options: { label: string; note?: string }[], onPick: (i: number) => void, onBack: () => void) {
+    const accents = ["#6edc6e", "#3df2ff", "#ffcf50", "#ff3d8b"];
+    const buttons = options
+      .map((o, i) => `<button data-c="${i}" class="bm-game" style="--accent:${accents[i % accents.length]}"><b>${esc(o.label)}</b><span class="bm-optional">${esc(o.note ?? "")}</span></button>`)
+      .join("");
+    const card = this.render(`
+      <h2>${esc(title)}</h2>
+      <p class="bm-optional">${esc(body)}</p>
+      ${buttons}
+      <button data-a="back" class="bm-secondary bm-small">Volver</button>
+    `);
+    card.querySelectorAll<HTMLButtonElement>("[data-c]").forEach((b) => {
+      b.onclick = () => onPick(Number(b.dataset.c));
+    });
+    card.querySelector<HTMLButtonElement>('[data-a="back"]')!.onclick = onBack;
+  }
+
   showLobby(code: string, game: string, players: string[], onStart: () => void, onCancel: () => void) {
     const items = players
       .map((name, i) => `<li><span class="bm-dot" style="background:${COLORS[i]}">${i + 1}</span>${esc(name)}</li>`)

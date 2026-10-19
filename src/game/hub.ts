@@ -25,6 +25,12 @@ export interface GameInfo {
   desc: string;
 }
 
+/** Ajustes con los que se crea la partida (los decide el anfitrión). */
+export interface GameOptions {
+  /** Bloques en modo supervivencia (si no, creativo). */
+  blocksSurvival?: boolean;
+}
+
 export const GAMES: GameInfo[] = [
   { id: "bomber", name: "Bomberman", desc: "Bombas, cajas y buffs · mapas procedurales" },
   { id: "karts", name: "Karts", desc: "Carreras en 3D con relieve · circuitos procedurales" },
@@ -45,13 +51,13 @@ export function gameName(id: GameId): string {
 /** En red cada jugador está en su equipo: WASD o flechas indistintamente. */
 const bothSchemes = (kb: Keyboard) => new LocalController(kb, ...PLAYER_CONTROLS);
 
-export function createHostGame(id: GameId, keyboard: Keyboard, remoteCount: number): HostGame {
+export function createHostGame(id: GameId, keyboard: Keyboard, remoteCount: number, opts: GameOptions = {}): HostGame {
   // Los bots los decide el anfitrión: los invitados solo dibujan los karts/bolas que reciben.
   if (id === "karts") return new KartsHost(new KartsInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "balls") return new BallsHost(new BallsInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "stick") return new StickHost(new StickInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "ruleta") return new RuletaHost(new RuletaInput(keyboard), remoteCount, "host", settings.bots);
-  if (id === "blocks") return new BlocksHost(new BlocksInput(keyboard), remoteCount, "host");
+  if (id === "blocks") return new BlocksHost(new BlocksInput(keyboard), remoteCount, "host", !!opts.blocksSurvival);
   return new BombermanHost(bothSchemes(keyboard), remoteCount);
 }
 

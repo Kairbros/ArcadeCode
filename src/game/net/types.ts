@@ -21,6 +21,8 @@ export interface HostGame {
   /** Mensaje de un invitado (index = número de jugador, 1..3). */
   onMessage(index: number, msg: unknown): void;
   onDisconnect(index: number): void;
+  /** Un panel abierto (p. ej. el inventario) que se cierra con Esc: true si lo ha consumido. */
+  escape?(): boolean;
 }
 
 /** Juego en un invitado: recibe estado, dibuja y produce los mensajes que envía al anfitrión. */
@@ -38,4 +40,6 @@ export interface GuestGame {
   draw(ctx: CanvasRenderingContext2D, pixelScale: number): void;
   /** Mensaje a enviar ahora, o undefined. El juego decide el ritmo según el transporte. */
   outgoing(transport: Transport): object | undefined;
+  /** Un panel abierto que se cierra con Esc: true si lo ha consumido. */
+  escape?(): boolean;
 }

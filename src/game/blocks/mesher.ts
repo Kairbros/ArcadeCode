@@ -1,7 +1,11 @@
 // Malla de un chunk: solo las caras que se ven (las que dan a un bloque que no tapa), con oclusión
 // ambiental por vértice (las esquinas metidas entre bloques salen más oscuras) y luz fija por cara.
 // El agua va en una malla aparte (transparente). Código puro: devuelve arrays, no toca WebGL.
-import { AIR, BLOCKS, LEAVES, WATER } from "./blocks";
+//
+// El chunk se copia antes a un búfer con una capa de un bloque alrededor: dentro del doble bucle todo son
+// lecturas de array (la oclusión mira 4 casillas por esquina), en vez de ~300.000 `world.get` por chunk.
+import { ATLAS_COLS, ATLAS_ROWS } from "./atlas";
+import { AIR, BEDROCK, BLOCKS, LEAVES, WATER } from "./blocks";
 import { CHUNK, WY } from "./config";
 import type { World } from "./world";
 
@@ -12,8 +16,16 @@ export interface MeshData {
   indices: number[];
 }
 
-const ATLAS_N = 4; // casillas por lado del atlas
 const EPS = 0.002; // margen dentro de cada casilla para que no se cuele la vecina
+
+// Búfer con margen: x y z van de -1 a CHUNK; y, de -1 a WY.
+const SX = CHUNK + 2;
+const SZ = CHUNK + 2;
+const SY = WY + 2;
+const SLAB = SX * SZ; // lo que avanza una capa en y
+const idx = (x: number, y: number, z: number) => (y + 1) * SLAB + (z + 1) * SX + (x + 1);
+/** Opacidad por tipo de bloque (evita mirar el objeto en cada esquina). */
+const OPAQUE = BLOCKS.map((b) => (b.opaque ? 1 : 0));
 
 interface Face {
   n: [number, number, number];
@@ -51,45 +63,67 @@ function faceVisible(b: number, nb: number): boolean {
   return nb !== b || b === LEAVES;
 }
 
+/** Búfer reutilizado entre llamadas (una sola hebra: no hace falta uno por chunk). */
+const pad = new Uint8Array(SLAB * SY);
+
+/** Copia el chunk con una capa de margen (aire fuera de los lados, roca madre por debajo). */
+function fillPadded(w: World, x0: number, z0: number) {
+  for (let y = 0; y < WY; y++) {
+    for (let z = -1; z <= CHUNK; z++) {
+      for (let x = -1; x <= CHUNK; x++) pad[idx(x, y, z)] = w.get(x0 + x, y, z0 + z);
+    }
+  }
+  for (let z = -1; z <= CHUNK; z++) {
+    for (let x = -1; x <= CHUNK; x++) {
+      pad[idx(x, -1, z)] = BEDROCK;
+      pad[idx(x, WY, z)] = AIR;
+    }
+  }
+}
+
 export function meshChunk(w: World, cx: number, cz: number): { solid: MeshData; water: MeshData } {
   const solid = empty(), water = empty();
   const x0 = cx * CHUNK, z0 = cz * CHUNK;
-  const opaque = (x: number, y: number, z: number) => BLOCKS[w.get(x, y, z)].opaque;
+  fillPadded(w, x0, z0);
   for (let y = 0; y < WY; y++) {
-    for (let z = z0; z < z0 + CHUNK; z++) {
-      for (let x = x0; x < x0 + CHUNK; x++) {
-        const b = w.get(x, y, z);
+    for (let z = 0; z < CHUNK; z++) {
+      for (let x = 0; x < CHUNK; x++) {
+        const b = pad[idx(x, y, z)];
         if (b === AIR) continue;
         const info = BLOCKS[b];
         const out = b === WATER ? water : solid;
         for (const f of FACES) {
           const fx = x + f.n[0], fy = y + f.n[1], fz = z + f.n[2];
           if (fy < 0) continue; // la cara de abajo del todo no se ve nunca
-          const nb = w.get(fx, fy, fz);
+          const fi = idx(fx, fy, fz);
+          const nb = pad[fi];
           if (!faceVisible(b, nb)) continue;
           const tile = info.tiles[f.tile];
-          const tu = tile % ATLAS_N, tv = Math.floor(tile / ATLAS_N);
+          const tu = tile % ATLAS_COLS, tv = Math.floor(tile / ATLAS_COLS);
           const start = out.positions.length / 3;
           const ao: number[] = [];
+          // Desplazamientos de las esquinas en el búfer (u y v son ejes, no diagonales).
+          const du = f.u[2] * SX + f.u[0];
+          const dv = f.v[1] * SLAB + f.v[2] * SX + f.v[0];
           // La superficie del agua queda un poco más baja que un bloque entero.
-          const top = b === WATER && f.n[1] === 1 && w.get(x, y + 1, z) !== WATER ? 0.88 : 1;
+          const top = b === WATER && f.n[1] === 1 && pad[idx(x, y + 1, z)] !== WATER ? 0.88 : 1;
           for (const [cu, cv] of CORNERS) {
-            const px = x + f.base[0] + f.u[0] * cu + f.v[0] * cv;
+            const px = x0 + x + f.base[0] + f.u[0] * cu + f.v[0] * cv;
             let py = y + f.base[1] + f.u[1] * cu + f.v[1] * cv;
-            const pz = z + f.base[2] + f.u[2] * cu + f.v[2] * cv;
+            const pz = z0 + z + f.base[2] + f.u[2] * cu + f.v[2] * cv;
             if (top < 1 && py > y) py = y + top;
             out.positions.push(px, py, pz);
             // Coordenadas de textura: v crece hacia arriba (la textura del lienzo se voltea al subirla).
             out.uvs.push(
-              (tu + EPS + cu * (1 - 2 * EPS)) / ATLAS_N,
-              1 - (tv + EPS + (1 - cv) * (1 - 2 * EPS)) / ATLAS_N,
+              (tu + EPS + cu * (1 - 2 * EPS)) / ATLAS_COLS,
+              1 - (tv + EPS + (1 - cv) * (1 - 2 * EPS)) / ATLAS_ROWS,
             );
             // Oclusión: bloques a los dos lados de la esquina y en diagonal, delante de la cara.
-            const du = cu ? 1 : -1, dv = cv ? 1 : -1;
-            const s1 = opaque(fx + f.u[0] * du, fy + f.u[1] * du, fz + f.u[2] * du);
-            const s2 = opaque(fx + f.v[0] * dv, fy + f.v[1] * dv, fz + f.v[2] * dv);
-            const c = opaque(fx + f.u[0] * du + f.v[0] * dv, fy + f.u[1] * du + f.v[1] * dv, fz + f.u[2] * du + f.v[2] * dv);
-            const level = b === WATER ? 3 : s1 && s2 ? 0 : 3 - Number(s1) - Number(s2) - Number(c);
+            const su = cu ? 1 : -1, sv = cv ? 1 : -1;
+            const s1 = OPAQUE[pad[fi + du * su]];
+            const s2 = OPAQUE[pad[fi + dv * sv]];
+            const c = OPAQUE[pad[fi + du * su + dv * sv]];
+            const level = b === WATER ? 3 : s1 && s2 ? 0 : 3 - s1 - s2 - c;
             ao.push(level);
             const k = f.shade * AO_LEVEL[level];
             out.colors.push(k, k, k);

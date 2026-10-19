@@ -1,7 +1,7 @@
 // Física del jugador: caja de colisión contra los bloques, eje a eje; nado y vuelo.
 import { WATER } from "./blocks";
 import {
-  FLY, GRAVITY, HALF_W, HEIGHT, JUMP_V, SWIM_V, WALK, WATER_GRAVITY,
+  FLY, GRAVITY, HALF_W, HEIGHT, JUMP_V, SPRINT, SWIM_V, WALK, WATER_GRAVITY,
 } from "./config";
 import type { World } from "./world";
 
@@ -24,6 +24,7 @@ export interface Move {
   yaw: number;
   jump: boolean; // mantenido: salta, nada hacia arriba o sube volando
   down: boolean; // baja volando
+  sprint?: boolean; // manteniendo Ctrl se corre (solo andando)
 }
 
 export function makeBody(x: number, y: number, z: number): Body {
@@ -59,7 +60,7 @@ export function stepBody(b: Body, m: Move, w: World, dt: number) {
     wx /= len;
     wz /= len;
   }
-  const speed = b.flying ? FLY : b.inWater ? WALK * 0.6 : WALK;
+  const speed = b.flying ? FLY : b.inWater ? WALK * 0.6 : m.sprint ? SPRINT : WALK;
   // Se acerca a la velocidad deseada: rápido en el suelo, más suave en el aire.
   const grip = Math.min(1, (b.ground || b.flying ? 14 : 4) * dt);
   b.vx += (wx * speed - b.vx) * grip;
