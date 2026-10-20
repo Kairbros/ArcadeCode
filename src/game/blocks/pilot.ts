@@ -1,24 +1,31 @@
-// El jugador propio (anfitrión o invitado): mirada, movimiento, inventario, minado con herramientas,
-// vida y bloque apuntado. Cada uno mueve a su jugador en su equipo, sin esperar a la red; los cambios de
-// bloques los ordena el anfitrión.
-//
-// Creativo: bloques infinitos, sin daño, vuelo y rotura instantánea.
-// Supervivencia: inventario, dureza de bloques (con la herramienta buena se tarda menos), objetos que
-// caen al romper, desgaste de herramientas, vida, caídas, ahogo y manzanas para curarse.
-import { AIR, BLOCKS, FURNACE, HOTBAR, isPlaceable, LEAVES, WATER } from "./blocks";
-import { EDIT_REPEAT, EYE, HOTBAR_SLOTS, LOOK_SPEED, MINING_GRACE, MOUSE_SENS, REACH, WX, WZ } from "./config";
-import { Drops } from "./drops";
-import { Inventory } from "./inventory";
-import { I_APPLE, I_MEAT, itemBlock, itemInfo } from "./items";
+// El jugador propio (anfitrión o invitado): mirada, movimiento, bloque al que apunta y cambios que pide.
+// Cada uno mueve a su jugador en su equipo, sin esperar a la red; los cambios de bloques los ordena el anfitrión.
+// En supervivencia lleva además su inventario (local, no viaja por la red), romper cuesta tiempo según el
+// bloque y la herramienta, lo roto va al inventario y poner gasta. Un clic sobre un animal lo golpea.
+// También lleva su vida y su hambre (`vitals.ts`): con el clic derecho mantenido come lo que tenga en la mano
+// y, si muere, suelta todo donde cayó y reaparece en su sitio de salida. Sus hornos (`furnace.ts`) son suyos
+// como el inventario: los lleva aquí, por posición, y funcionan aunque no tenga la pantalla abierta.
+import { AIR, BLOCKS, FURNACE, HOTBAR, TABLE, TORCH, WATER, dropOf } from "./blocks";
+import { ATTACK_COOL, ATTACK_REACH, EDIT_REPEAT, EYE, LOOK_SPEED, MOUSE_SENS, REACH, WX, WZ } from "./config";
+import { Crafter, type CraftKind } from "./craftui";
+import { Furnace } from "./furnace";
 import type { WalkSource } from "./input";
-import { breakSeconds, dropOf } from "./mining";
-import { Mobs } from "./mobs";
+import { Inventory, type Stack } from "./inventory";
+import { TOOL_SPEED, isPlaceable, itemInfo } from "./items";
+import { rayMobs, type MobView } from "./mobs";
 import { makeBody, overlapsCell, stepBody, type Body } from "./player";
-import { Survival } from "./survival";
+import {
+  ATTACK_EXHAUST, BREAK_EXHAUST, EAT_TIME, JUMP_EXHAUST, MAX_HUNGER, RESPAWN_DELAY, Vitals,
+} from "./vitals";
 import { World, type RayHit } from "./world";
 
-/** Cambio de un bloque: x, y, z, bloque nuevo (0 = romperlo). */
-export type Edit = [number, number, number, number];
+/** Objeto que sale del inventario: tirado hacia delante o, al morir, desparramado a los pies (`spill`). */
+export interface Thrown extends Stack {
+  spill?: boolean;
+}
+
+/** Cambio de un bloque: x, y, z, bloque nuevo (0 = romperlo) y, en supervivencia, el objeto que suelta. */
+export type Edit = [number, number, number, number] | [number, number, number, number, number];
 
 /** Posición de otro jugador (para no ponerle un bloque encima). */
 export interface Occupant {
@@ -27,136 +34,201 @@ export interface Occupant {
   z: number;
 }
 
-/** Lo que se está rompiendo ahora mismo (para la barra de progreso del HUD). */
-export interface Mining {
-  x: number;
-  y: number;
-  z: number;
-  /** 0..1 */
-  k: number;
-}
-
 export class Pilot {
   body: Body;
   yaw = 0;
   pitch = 0;
   slot = 0;
-  /** Barra del modo creativo (bloques infinitos; el botón central cambia lo que hay en cada casilla). */
-  slots: number[] = HOTBAR.slice(0, HOTBAR_SLOTS);
-  /** Inventario de la supervivencia (en creativo está vacío y no se usa). */
-  readonly inv = new Inventory();
-  /** Objetos en el suelo de este jugador. */
-  readonly drops = new Drops();
-  /** Animales de este jugador. */
-  readonly mobs = new Mobs();
-  /** ¿Hay un horno cerca? (para poder fundir desde el inventario) */
-  nearFurnace = false;
-  /** Estado de vida (null en creativo). */
-  readonly survival: Survival | null;
   target: RayHit | null = null;
-  mining: Mining | null = null;
   /** Distancia andada (para balancear brazos y piernas del muñeco). */
   stride = 0;
+  readonly inventory = new Inventory();
+  /** Hornos de este jugador: "x,y,z" → lo que tiene dentro. */
+  readonly furnaces = new Map<string, Furnace>();
+  /** Pantalla de inventario o de la mesa de trabajo abierta (supervivencia). */
+  crafter: Crafter | null = null;
+  /** Progreso al romper el bloque apuntado (0..1). */
+  digProgress = 0;
+  /** Objetos que el jugador ha tirado este frame (los recoge el juego y los pone en el suelo). */
+  throws: Thrown[] = [];
+  /** Animal apuntado (0 = ninguno): tapa al bloque de detrás. */
+  mobTarget = 0;
+  /** Animales golpeados este frame (el juego aplica el daño según lo que hay en la mano). */
+  hits: number[] = [];
+  readonly vitals = new Vitals();
+  /** Segundos muerto (-1 = vivo). */
+  deadFor = -1;
+  /** El invitado no deja reaparecer hasta que el anfitrión ha recibido todo lo que soltó al morir. */
+  holdRespawn = false;
+  private digKey = "";
   private digCool = 0;
   private placeCool = 0;
-  private eatCool = 0;
-  /** Enfriamiento entre golpes a los animales. */
   private attackCool = 0;
-  /** Cada cuánto se mira si hay un horno cerca. */
-  private furnaceT = 0;
-  /** Cada cuánto se repone la manada. */
-  private mobT = 45;
-  private sprinting = false;
-  /** Tiempo que se guarda el progreso de minado al soltar (para minar a clics). */
-  private grace = 0;
   private readonly spawn: [number, number, number];
 
-  constructor(world: World, index: number, survival: boolean) {
+  constructor(world: World, index: number, readonly survival = false) {
     // Aparecen cerca del centro, separados según su número, mirando al centro.
     const a = (index / 4) * Math.PI * 2;
     const [x, z] = world.dryColumn(Math.floor(WX / 2 + Math.cos(a) * 3), Math.floor(WZ / 2 + Math.sin(a) * 3));
-    this.body = makeBody(x + 0.5, world.surface(x, z) + 1, z + 0.5);
+    this.spawn = [x + 0.5, world.surface(x, z) + 1, z + 0.5];
+    this.body = makeBody(...this.spawn);
     this.yaw = Math.atan2(this.body.x - WX / 2, this.body.z - WZ / 2) || a;
-    this.spawn = [this.body.x, this.body.y, this.body.z];
-    this.survival = survival ? new Survival() : null;
-    // Animales alrededor del punto de aparición (solo en supervivencia).
-    if (this.survival) this.mobs.spawnAround(world, this.body.x, this.body.z, 7);
   }
 
-  get survivalMode(): boolean {
-    return this.survival !== null;
+  get dead(): boolean {
+    return this.survival && this.vitals.dead;
+  }
+
+  /** Empujón al recibir un golpe (de un monstruo o una explosión): sale despedido y da un saltito. */
+  knock(kx: number, kz: number) {
+    if (!Number.isFinite(kx) || !Number.isFinite(kz)) return;
+    const b = this.body;
+    b.vx = kx;
+    b.vz = kz;
+    b.vy = Math.max(b.vy, 4.5);
+    b.ground = false;
+  }
+
+  /** Al morir: cierra la pantalla abierta y suelta todo el inventario donde está. */
+  private die(input: WalkSource) {
+    this.toggleUi(input, null);
+    this.throws = this.throws.map((t) => ({ ...t, spill: true }));
+    this.inventory.slots.forEach((s, i) => {
+      if (s) this.throws.push({ id: s.id, n: s.n, spill: true });
+      this.inventory.slots[i] = null;
+    });
+    this.deadFor = 0;
+    this.digProgress = 0;
+    this.vitals.eating = 0;
+    this.target = null;
+    this.mobTarget = 0;
+  }
+
+  /** Muerto: no se mueve ni hace nada; pasado un momento, ESPACIO o clic lo hace reaparecer. */
+  private whileDead(input: WalkSource, dt: number): Edit[] {
+    this.deadFor += dt;
+    this.vitals.hurt = Math.max(0, this.vitals.hurt - dt);
+    input.takeMouse();
+    input.takeInventory();
+    input.takeClicks();
+    while (input.takeThrow());
+    const wants = input.takeDig() || input.takePlace() || input.jump || input.digMouse;
+    if (wants && this.deadFor >= RESPAWN_DELAY && !this.holdRespawn) {
+      this.body = makeBody(...this.spawn);
+      this.vitals.reset();
+      this.deadFor = -1;
+    }
+    return [];
   }
 
   /** Objeto en la mano (0 = nada). */
-  get heldId(): number {
-    if (this.survival) return this.inv.held?.id ?? 0;
-    return this.slots[this.slot] ?? 0;
+  get held(): number {
+    return this.survival ? (this.inventory.slots[this.slot]?.id ?? 0) : HOTBAR[this.slot];
   }
 
-  /** Bloque que pone al colocar (0 = lo que lleva no es un bloque). */
-  get heldBlock(): number {
-    return itemBlock(this.heldId);
+  /** Bloque que se pondría (0 si lo que se lleva no es un bloque). */
+  get block(): number {
+    return isPlaceable(this.held) ? this.held : 0;
+  }
+
+  /** Abre (o cierra) el inventario, la mesa de trabajo o un horno. */
+  private toggleUi(input: WalkSource, size: CraftKind | null, furnace: Furnace | null = null) {
+    if (this.crafter) this.throws.push(...this.crafter.close(this.inventory));
+    this.crafter = size ? new Crafter(size, furnace) : null;
+    input.setUi(!!this.crafter);
+  }
+
+  /** Funde en todos sus hornos. Si alguien rompe uno, lo que tenía vuelve al inventario (o al suelo si no cabe). */
+  private tickFurnaces(input: WalkSource, world: World, dt: number) {
+    for (const [key, f] of this.furnaces) {
+      const [x, y, z] = key.split(",").map(Number);
+      if (world.get(x, y, z) === FURNACE) {
+        f.update(dt);
+        continue;
+      }
+      if (this.crafter?.furnace === f) this.toggleUi(input, null);
+      for (const s of f.slots) {
+        const left = s ? this.inventory.add(s.id, s.n) : 0;
+        if (s && left) this.throws.push({ id: s.id, n: left });
+      }
+      this.furnaces.delete(key);
+    }
+  }
+
+  /** Cierra la pantalla abierta (Esc). Devuelve si había alguna. */
+  closeUi(input: WalkSource): boolean {
+    if (!this.crafter) return false;
+    this.toggleUi(input, null);
+    return true;
   }
 
   /** Avanza un frame y devuelve los cambios de bloques que pide el jugador. */
-  update(input: WalkSource, world: World, others: Occupant[], dt: number, uiOpen = false): Edit[] {
+  update(input: WalkSource, world: World, others: Occupant[], dt: number, mobs: readonly MobView[] = []): Edit[] {
     input.poll();
-    if (this.survival) this.slot = this.inv.sel;
-    if (uiOpen) {
-      // Con el inventario abierto no se mira ni se toca nada, pero el jugador sigue cayendo.
-      stepBody(this.body, { forward: 0, right: 0, yaw: this.yaw, jump: false, down: false }, world, dt);
-      this.target = null;
-      this.mining = null;
-      this.tickSurvival(world, dt);
-      this.tickDrops(world, dt);
-      return [];
+    if (this.dead) {
+      if (this.deadFor < 0) this.die(input);
+      return this.whileDead(input, dt);
     }
-
+    if (this.survival) this.tickFurnaces(input, world, dt);
+    if (this.survival && input.takeInventory()) this.toggleUi(input, this.crafter ? null : 2);
+    const ui = !!this.crafter;
     const [mx, my] = input.takeMouse();
-    this.yaw -= mx * MOUSE_SENS + input.lookX * LOOK_SPEED * dt;
-    this.pitch -= my * MOUSE_SENS - input.lookY * LOOK_SPEED * dt;
-    this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch));
-    const count = this.survival ? this.inv.hotbar.length : this.slots.length;
-    const slot = input.takeSlot();
-    if (slot >= 0 && slot < count) this.setSlot(slot);
-    const scroll = input.takeScroll();
-    if (scroll) this.setSlot((this.slot + scroll + count * 4) % count);
+    if (!ui) {
+      this.yaw -= mx * MOUSE_SENS + input.lookX * LOOK_SPEED * dt;
+      this.pitch -= my * MOUSE_SENS - input.lookY * LOOK_SPEED * dt;
+      this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch));
+      const slot = input.takeSlot();
+      if (slot >= 0) this.slot = slot;
+      const scroll = input.takeScroll();
+      if (scroll) this.slot = (this.slot + scroll + HOTBAR.length * 4) % HOTBAR.length;
+    }
     if (input.takeFly() && !this.survival) this.body.flying = !this.body.flying;
+    if (this.crafter) {
+      for (const c of input.takeClicks()) {
+        const thrown = this.crafter?.click(c.x, c.y, c.button, c.shift, this.inventory);
+        if (thrown) this.throws.push(thrown);
+      }
+    }
 
     const b = this.body;
     const px = b.x, pz = b.z;
-    this.sprinting = input.sprint && !b.flying;
-    stepBody(b, {
-      forward: input.forward, right: input.right, yaw: this.yaw, jump: input.jump, down: input.down,
-      sprint: input.sprint,
-    }, world, dt);
-    if (b.ground || b.flying) this.stride += Math.hypot(b.x - px, b.z - pz);
+    const move = ui
+      ? { forward: 0, right: 0, yaw: this.yaw, jump: false, down: false }
+      : { forward: input.forward, right: input.right, yaw: this.yaw, jump: input.jump, down: input.down };
+    const wasGround = b.ground;
+    stepBody(b, move, world, dt);
+    const walked = b.ground || b.flying ? Math.hypot(b.x - px, b.z - pz) : 0;
+    this.stride += walked;
     // Si algo lo deja fuera del mundo (no debería), vuelve arriba.
     if (b.y < -5) Object.assign(b, makeBody(b.x, world.surface(Math.floor(b.x), Math.floor(b.z)) + 1, b.z));
+    if (this.survival) {
+      if (move.jump && wasGround && !b.ground && b.vy > 0) this.vitals.exhaust(JUMP_EXHAUST);
+      const head = world.get(Math.floor(b.x), Math.floor(b.y + EYE), Math.floor(b.z)) === WATER;
+      this.vitals.update(dt, b, head, walked);
+      if (this.vitals.dead) {
+        this.die(input);
+        return [];
+      }
+    }
 
     const [dx, dy, dz] = this.look();
     this.target = world.raycast(b.x, b.y + EYE, b.z, dx, dy, dz, REACH);
-    // Botón central: copiar el bloque apuntado a la barra (solo en creativo).
-    if (input.takePick() && !this.survival) this.pick(world);
-
-    const edits = this.survival
-      ? this.mineAndBuild(input, world, others, dt)
-      : this.buildInstant(input, world, others, dt);
-    this.tickSurvival(world, dt);
-    this.tickDrops(world, dt);
-    this.tickMobs(world, dt);
-    return edits;
+    // Un animal entre los ojos y el bloque apuntado (y a mano) se lleva el clic.
+    const mob = this.survival ? rayMobs(mobs, b.x, b.y + EYE, b.z, dx, dy, dz, Math.min(ATTACK_REACH, this.target?.t ?? Infinity)) : null;
+    this.mobTarget = mob?.id ?? 0;
+    if (mob) this.target = null;
+    if (ui) {
+      this.digProgress = 0;
+      this.vitals.eating = 0;
+      while (input.takeThrow()); // Q con el inventario abierto no tira nada
+      return [];
+    }
+    return this.survival ? this.survive(input, world, others, dt) : this.create(input, world, others, dt);
   }
 
-  private setSlot(i: number) {
-    this.slot = i;
-    if (this.survival) this.inv.sel = i;
-  }
-
-  // --- Creativo: romper y poner al momento -------------------------------------------------
-  private buildInstant(input: WalkSource, world: World, others: Occupant[], dt: number): Edit[] {
+  /** Creativo: romper es instantáneo y poner no gasta. */
+  private create(input: WalkSource, world: World, others: Occupant[], dt: number): Edit[] {
     const edits: Edit[] = [];
-    const b = this.body;
     this.digCool -= dt;
     this.placeCool -= dt;
     const dig = input.takeDig() || (input.digHeld && this.digCool <= 0);
@@ -166,188 +238,104 @@ export class Pilot {
       edits.push([t.x, t.y, t.z, AIR]);
       this.digCool = EDIT_REPEAT;
     }
-    if (place && t && !dig) {
-      const x = t.x + t.nx, y = t.y + t.ny, z = t.z + t.nz;
-      if (this.canPlace(world, b, others, x, y, z)) {
-        edits.push([x, y, z, this.heldBlock]);
+    if (place && !dig) {
+      const e = this.placement(world, others);
+      if (e) {
+        edits.push(e);
         this.placeCool = EDIT_REPEAT;
       }
     }
     return edits;
   }
 
-  // --- Supervivencia: minar con tiempo, soltar objetos, gastar herramientas ----------------
-  private mineAndBuild(input: WalkSource, world: World, others: Occupant[], dt: number): Edit[] {
+  /** Supervivencia: romper lleva tiempo, lo roto va al inventario y poner gasta. */
+  private survive(input: WalkSource, world: World, others: Occupant[], dt: number): Edit[] {
     const edits: Edit[] = [];
-    const b = this.body;
     const t = this.target;
-    const held = this.heldId;
-    this.digCool -= dt;
+    // Romper es mantener pulsado; el toque solo cuenta para golpear (un clic rápido puede no verse como mantenido).
+    const tap = input.takeDig();
+    this.attackCool -= dt;
+    if (this.mobTarget && (tap || input.digMouse) && this.attackCool <= 0) {
+      this.hits.push(this.mobTarget);
+      this.attackCool = ATTACK_COOL;
+      this.vitals.exhaust(ATTACK_EXHAUST);
+    }
+    // Q: tirar uno del objeto en la mano (Ctrl+Q, el montón entero).
+    const th = input.takeThrow();
+    const hand = this.inventory.slots[this.slot];
+    if (th && hand) {
+      const n = th === 2 ? hand.n : 1;
+      this.throws.push({ id: hand.id, n });
+      this.inventory.take(this.slot, n);
+    }
+    const block = t ? world.get(t.x, t.y, t.z) : AIR;
+    const info = BLOCKS[block];
+    const key = t ? `${t.x},${t.y},${t.z}` : "";
+    if (key !== this.digKey) {
+      this.digKey = key;
+      this.digProgress = 0;
+    }
+    if (input.digMouse && t && !info.unbreakable && info.hard > 0) {
+      const tool = itemInfo(this.held).tool;
+      const tier = tool && tool.kind === info.tool ? tool.tier : 0;
+      this.digProgress += (dt * TOOL_SPEED[tier]) / info.hard;
+      if (this.digProgress >= 1) {
+        // Lo que suelta cae al suelo (lo pone el anfitrión) y se recoge al acercarse.
+        edits.push([t.x, t.y, t.z, AIR, dropOf(block, tier)]);
+        this.digProgress = 0;
+        this.digKey = "";
+        this.vitals.exhaust(BREAK_EXHAUST);
+      }
+    } else {
+      this.digProgress = 0;
+    }
+
     this.placeCool -= dt;
-    this.eatCool -= dt;
-    const digClick = input.takeDig();
-    // Si el clic da a un animal, pega en vez de minar.
-    if (digClick && this.tryAttack(world)) {
-      this.mining = null;
+    const place = input.takePlace() || (input.placeHeld && this.placeCool <= 0);
+    if (place && t && (block === TABLE || block === FURNACE)) {
+      this.vitals.eating = 0;
+      if (block === TABLE) this.toggleUi(input, 3); // usar la mesa de trabajo
+      else {
+        const key = `${t.x},${t.y},${t.z}`;
+        if (!this.furnaces.has(key)) this.furnaces.set(key, new Furnace());
+        this.toggleUi(input, "furnace", this.furnaces.get(key));
+      }
       return edits;
     }
-    const holding = digClick || input.digHeld;
-    const place = input.takePlace() || (input.placeHeld && this.placeCool <= 0);
-    if (digClick) this.grace = MINING_GRACE;
-    else this.grace -= dt;
-
-    // Minar: el bloque se rompe cuando el progreso llega a 1. Al soltar, el progreso se guarda un
-    // momento (MINING_GRACE) para que minar a clics también avance.
-    const block = t ? world.get(t.x, t.y, t.z) : AIR;
-    const usable = !!t && block !== AIR && !BLOCKS[block].unbreakable;
-    if (!usable || (!holding && this.grace <= 0)) {
-      this.mining = null;
-      if (!usable) this.grace = 0;
-    } else if (holding) {
-      if (!this.mining || this.mining.x !== t!.x || this.mining.y !== t!.y || this.mining.z !== t!.z) {
-        this.mining = { x: t!.x, y: t!.y, z: t!.z, k: 0 };
+    // Comer: clic derecho mantenido con comida en la mano (si hay hambre).
+    const food = itemInfo(this.held).food;
+    if (food && input.placeHeld && this.vitals.hunger < MAX_HUNGER) {
+      this.vitals.eating += dt;
+      if (this.vitals.eating >= EAT_TIME) {
+        this.vitals.eat(food);
+        this.inventory.take(this.slot);
+        this.vitals.eating = 0;
       }
-      this.mining.k += dt / breakSeconds(block, held);
-      if (this.mining.k >= 1) {
-        edits.push([t!.x, t!.y, t!.z, AIR]);
-        this.afterBreak(t!.x, t!.y, t!.z, block, held);
-        this.mining = null;
-        this.grace = 0;
-      }
+    } else {
+      this.vitals.eating = 0;
     }
-    // Poner o comer (el clic que pone no mina a la vez).
-    if (place && !digClick && t) {
-      const stack = this.inv.held;
-      const info = stack ? itemInfo(stack.id) : undefined;
-      if (stack && info?.food && this.survival && this.eatCool <= 0 && this.survival.eat(info.food, info.heal ?? 0)) {
-        this.inv.consumeHeld(1);
-        this.eatCool = 0.4;
-        this.placeCool = 0.4;
-      } else if (stack && isPlaceable(stack.id)) {
-        const x = t.x + t.nx, y = t.y + t.ny, z = t.z + t.nz;
-        if (this.canPlace(world, b, others, x, y, z)) {
-          edits.push([x, y, z, stack.id]);
-          this.inv.consumeHeld(1);
-          this.placeCool = EDIT_REPEAT;
-        }
+    if (place && this.block) {
+      const e = this.placement(world, others);
+      if (e) {
+        edits.push(e);
+        this.inventory.take(this.slot);
+        this.placeCool = EDIT_REPEAT;
       }
     }
     return edits;
   }
 
-  /** ¿Se puede poner un bloque en (x, y, z)? */
-  private canPlace(world: World, b: Body, others: Occupant[], x: number, y: number, z: number): boolean {
-    const free = World.inside(x, y, z) && [AIR, WATER].includes(world.get(x, y, z));
-    if (!free) return false;
-    if (!isPlaceable(this.heldBlock)) return false;
-    return ![b, ...others].some((o) => overlapsCell(o, x, y, z));
-  }
-
-  /** Objetos que salen al romper, y desgaste de la herramienta. */
-  private afterBreak(x: number, y: number, z: number, block: number, held: number) {
-    if (!this.survival) return;
-    const drop = dropOf(block, held);
-    if (drop) this.drops.spawn(drop.id, x + 0.5, y + 0.5, z + 0.5, drop.n);
-    if (block === LEAVES && Math.random() < 0.12) this.drops.spawn(I_APPLE, x + 0.5, y + 0.9, z + 0.5);
-    if (itemInfo(held)?.tool) this.inv.damageHeld(1);
-  }
-
-  /** Golpe con lo que se lleva en la mano (espada o puño). True si ha dado a un animal. */
-  private tryAttack(world: World): boolean {
-    if (this.attackCool > 0) return false;
-    const [dx, dy, dz] = this.look();
-    const b = this.body;
-    const mob = this.mobs.hitAt(b.x, b.y + EYE, b.z, dx, dy, dz, 3.2);
-    if (!mob) return false;
-    // Si hay un bloque más cerca que el animal, el clic va al bloque.
+  /** Dónde iría el bloque elegido (junto a la cara apuntada), si cabe ahí. */
+  private placement(world: World, others: Occupant[]): Edit | null {
     const t = this.target;
-    if (t) {
-      const dist = Math.hypot(t.x + 0.5 - b.x, t.y + 0.5 - (b.y + EYE), t.z + 0.5 - b.z);
-      if (dist < Math.hypot(mob.x - b.x, mob.y + 0.5 - (b.y + EYE), mob.z - b.z)) return false;
-    }
-    const info = itemInfo(this.heldId);
-    this.attackCool = 0.45;
-    this.digCool = 0.45;
-    const dead = this.mobs.damage(mob, info?.damage ?? 1, b);
-    if (info?.tool) this.inv.damageHeld(1); // las espadas se gastan
-    if (dead) {
-      const n = 1 + (Math.random() < 0.45 ? 1 : 0);
-      this.drops.spawn(I_MEAT, mob.x, mob.y + 0.5, mob.z, n);
-    }
-    return true;
-  }
-
-  /** Mueve a los animales, repone la manada y mira si hay un horno cerca. */
-  private tickMobs(world: World, dt: number) {
-    if (!this.survival) return;
-    this.attackCool -= dt;
-    this.mobs.update(dt, world, this.body.x, this.body.z);
-    // Si se han cazado casi todos, vuelven a aparecer cerca (si no, no habría comida).
-    this.mobT -= dt;
-    if (this.mobT <= 0) {
-      this.mobT = 45;
-      if (this.mobs.list.length < 4) this.mobs.spawnAround(world, this.body.x, this.body.z, 4);
-    }
-    this.furnaceT -= dt;
-    if (this.furnaceT <= 0) {
-      this.furnaceT = 0.5;
-      this.nearFurnace = this.findFurnace(world);
-    }
-  }
-
-  /** ¿Hay un horno a menos de 4 bloques? */
-  private findFurnace(world: World): boolean {
-    const b = this.body;
-    const r = 4;
-    const x0 = Math.floor(b.x), y0 = Math.floor(b.y), z0 = Math.floor(b.z);
-    for (let y = y0 - 2; y <= y0 + 2; y++) {
-      for (let x = x0 - r; x <= x0 + r; x++) {
-        for (let z = z0 - r; z <= z0 + r; z++) {
-          if (world.get(x, y, z) === FURNACE) return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  /** Vida, caídas, ahogo y reaparición. */
-  private tickSurvival(world: World, dt: number) {
-    const s = this.survival;
-    if (!s) return;
-    const b = this.body;
-    const head = world.get(Math.floor(b.x), Math.floor(b.y + EYE), Math.floor(b.z));
-    s.update(dt, { ground: b.ground, inWater: b.inWater, headWater: head === WATER, vy: b.vy, sprinting: this.sprinting });
-    if (s.dead) {
-      this.mining = null;
-      return;
-    }
-    if (s.takeRevive()) {
-      // Reaparece en el punto de inicio, con la vida llena.
-      Object.assign(b, makeBody(this.spawn[0], this.spawn[1], this.spawn[2]));
-      this.mining = null;
-    }
-  }
-
-  /** Mueve los objetos del suelo y recoge los que se puedan. */
-  private tickDrops(world: World, dt: number) {
-    if (!this.survival) return;
-    const b = this.body;
-    for (const d of this.drops.update(dt, world, b.x, b.y, b.z)) {
-      const left = this.inv.add(d.id, d.n, d.dur);
-      if (left <= 0) this.drops.remove(d);
-      else d.n = left;
-    }
-  }
-
-  /** El bloque al que se apunta pasa a la mano: a su casilla si ya estaba en la barra, si no a la actual. */
-  private pick(world: World) {
-    const t = this.target;
-    if (!t) return;
-    const b = world.get(t.x, t.y, t.z);
-    if (!isPlaceable(b)) return;
-    const at = this.slots.indexOf(b);
-    if (at >= 0) this.setSlot(at);
-    else this.slots[this.slot] = b;
+    if (!t || !this.block) return null;
+    const x = t.x + t.nx, y = t.y + t.ny, z = t.z + t.nz;
+    const here = world.get(x, y, z);
+    const free = World.inside(x, y, z) && (here === AIR || (here === WATER && this.block !== TORCH));
+    // La antorcha necesita apoyarse en el suelo o en una pared; como no choca, se puede poner donde hay alguien.
+    if (this.block === TORCH && world.torchSupport(x, y, z) < 0) return null;
+    const blocked = BLOCKS[this.block].solid && [this.body, ...others].some((o) => overlapsCell(o, x, y, z));
+    return free && !blocked ? [x, y, z, this.block] : null;
   }
 
   /** Dirección de la mirada (vector unitario). */

@@ -28,6 +28,8 @@ export const EDIT_REPEAT = 0.25; // con la tecla pulsada, se repite cada tanto
 export const MINING_GRACE = 0.35;
 export const LOOK_SPEED = 2.4; // giro con las flechas (rad/s)
 export const MOUSE_SENS = 0.0028;
+export const ATTACK_REACH = 3.5; // distancia para golpear a un animal
+export const ATTACK_COOL = 0.45; // segundos entre golpes (mantener el clic sigue golpeando)
 
 // --- Barra rápida ---
 export const HOTBAR_SLOTS = 9; // teclas 1–9

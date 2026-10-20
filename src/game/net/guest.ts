@@ -220,13 +220,12 @@ export class GuestSession {
     }
   }
 
-  /** Esc con un panel abierto (inventario): se lo queda el juego en vez de volver al menú. */
-  escape(): boolean {
-    return this.game?.escape?.() ?? false;
-  }
-
   draw(ctx: CanvasRenderingContext2D, pixelScale: number) {
     this.game?.draw(ctx, pixelScale);
+  }
+
+  escape(): boolean {
+    return !!this.game?.escape?.();
   }
 
   close() {

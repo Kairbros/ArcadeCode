@@ -13,22 +13,18 @@ import { RuletaGuest, RuletaHost } from "./ruleta/game";
 import { RuletaInput } from "./ruleta/input";
 import { BlocksGuest, BlocksHost } from "./blocks/game";
 import { BlocksInput } from "./blocks/input";
+import { CasinoGuest, CasinoHost } from "./casino/game";
+import { CasinoInput } from "./casino/input";
 import type { Keyboard } from "./core/keyboard";
 import { settings } from "./core/settings";
 import type { GuestGame, HostGame } from "./net/types";
 
-export type GameId = "bomber" | "karts" | "balls" | "stick" | "ruleta" | "blocks";
+export type GameId = "bomber" | "karts" | "balls" | "stick" | "ruleta" | "blocks" | "survival" | "casino";
 
 export interface GameInfo {
   id: GameId;
   name: string;
   desc: string;
-}
-
-/** Ajustes con los que se crea la partida (los decide el anfitrión). */
-export interface GameOptions {
-  /** Bloques en modo supervivencia (si no, creativo). */
-  blocksSurvival?: boolean;
 }
 
 export const GAMES: GameInfo[] = [
@@ -37,7 +33,9 @@ export const GAMES: GameInfo[] = [
   { id: "balls", name: "Sumo de bolas", desc: "Empuja a los rivales a la lava · 3D" },
   { id: "stick", name: "Monigotes", desc: "Peleas en plataformas con armas · último en pie" },
   { id: "ruleta", name: "Ruleta de cartuchos", desc: "Escopeta, cartuchos y objetos contra el crupier · 3D" },
-  { id: "blocks", name: "Bloques", desc: "Mundo de bloques para construir juntos · 3D" },
+  { id: "blocks", name: "Bloques: creativo", desc: "Mundo de bloques para construir juntos · 3D" },
+  { id: "survival", name: "Bloques: supervivencia", desc: "Rompe, recoge y craftea herramientas · 3D" },
+  { id: "casino", name: "Casino entre amigos", desc: "Ruleta, plinko, tragaperras, moneda y dados · 3D · con peleas y robos" },
 ];
 
 export function isGameId(id: unknown): id is GameId {
@@ -51,13 +49,14 @@ export function gameName(id: GameId): string {
 /** En red cada jugador está en su equipo: WASD o flechas indistintamente. */
 const bothSchemes = (kb: Keyboard) => new LocalController(kb, ...PLAYER_CONTROLS);
 
-export function createHostGame(id: GameId, keyboard: Keyboard, remoteCount: number, opts: GameOptions = {}): HostGame {
+export function createHostGame(id: GameId, keyboard: Keyboard, remoteCount: number): HostGame {
   // Los bots los decide el anfitrión: los invitados solo dibujan los karts/bolas que reciben.
   if (id === "karts") return new KartsHost(new KartsInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "balls") return new BallsHost(new BallsInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "stick") return new StickHost(new StickInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "ruleta") return new RuletaHost(new RuletaInput(keyboard), remoteCount, "host", settings.bots);
-  if (id === "blocks") return new BlocksHost(new BlocksInput(keyboard), remoteCount, "host", !!opts.blocksSurvival);
+  if (id === "blocks" || id === "survival") return new BlocksHost(new BlocksInput(keyboard), remoteCount, "host", id);
+  if (id === "casino") return new CasinoHost(new CasinoInput(keyboard), remoteCount, "host");
   return new BombermanHost(bothSchemes(keyboard), remoteCount);
 }
 
@@ -66,6 +65,7 @@ export function createGuestGame(id: GameId, index: number, keyboard: Keyboard): 
   if (id === "balls") return new BallsGuest(index, new BallsInput(keyboard));
   if (id === "stick") return new StickGuest(index, new StickInput(keyboard));
   if (id === "ruleta") return new RuletaGuest(index, new RuletaInput(keyboard));
-  if (id === "blocks") return new BlocksGuest(index, new BlocksInput(keyboard));
+  if (id === "blocks" || id === "survival") return new BlocksGuest(index, new BlocksInput(keyboard), id);
+  if (id === "casino") return new CasinoGuest(index, new CasinoInput(keyboard));
   return new BombermanGuest(index, bothSchemes(keyboard));
 }

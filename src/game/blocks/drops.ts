@@ -1,78 +1,120 @@
-// Objetos en el suelo: al romper un bloque sale su objeto, cae con gravedad y se queda girando hasta que
-// el jugador pasa cerca. Solo existen en el equipo de cada jugador (no viajan por la red).
+// Objetos tirados en el suelo (supervivencia). Solo los simula el anfitrión: caen, se apoyan en los
+// bloques, se juntan con otros iguales y caducan. Él decide quién recoge cada uno, así que nunca se
+// duplican ni se pierden; los invitados solo los dibujan.
+import { WATER } from "./blocks";
+import { itemInfo } from "./items";
 import type { World } from "./world";
 
 export interface Drop {
   id: number;
+  item: number;
   n: number;
-  /** Usos que le quedan si es una herramienta. */
-  dur?: number;
   x: number;
-  y: number;
+  y: number; // centro del cubito
   z: number;
   vx: number;
   vy: number;
   vz: number;
-  /** Segundos desde que apareció (no se puede recoger al principio). */
   age: number;
+  /** Jugador que lo tiró (-1 = salió de un bloque): tarda más en poder recogerlo él. */
+  owner: number;
 }
 
-/** Tope de objetos en el suelo (los más viejos desaparecen). */
-export const MAX_DROPS = 200;
-const GRAVITY = 22;
-const PICK_DELAY = 0.35;
+export interface Picker {
+  index: number;
+  x: number; // pies
+  y: number;
+  z: number;
+}
+
+const HALF = 0.125; // medio lado del cubito
+const GRAVITY = 20;
 const PICK_RADIUS = 1.5;
-const LIFE = 300;
+const PICK_DELAY = 0.4; // segundos antes de poder recogerlo
+const OWNER_DELAY = 1.5; // quien lo tira espera más (si no, lo recogería al momento)
+const LIFETIME = 300;
+const MERGE_RADIUS = 0.6;
+export const MAX_DROPS = 96;
 
 export class Drops {
   list: Drop[] = [];
+  private next = 1;
 
-  spawn(id: number, x: number, y: number, z: number, n = 1, dur?: number) {
-    if (this.list.length >= MAX_DROPS) this.list.shift();
+  spawn(item: number, n: number, x: number, y: number, z: number, vx?: number, vy = 3, vz?: number, owner = -1) {
+    const a = Math.random() * Math.PI * 2;
     this.list.push({
-      id, n, dur, x, y, z, age: 0,
-      vx: (Math.random() - 0.5) * 1.6, vy: 2.2, vz: (Math.random() - 0.5) * 1.6,
+      id: this.next++, item, n, x, y, z, vx: vx ?? Math.cos(a) * 1.2, vy, vz: vz ?? Math.sin(a) * 1.2, age: 0, owner,
     });
+    if (this.list.length > MAX_DROPS) this.list.shift(); // el más viejo desaparece
   }
 
-  /** Mueve los objetos (gravedad y choque con el mundo) y devuelve los que el jugador puede coger. */
-  update(dt: number, w: World, px: number, py: number, pz: number): Drop[] {
-    const near: Drop[] = [];
-    const cy = py + 0.9;
-    this.list = this.list.filter((d) => {
+  update(dt: number, w: World) {
+    for (const d of this.list) {
       d.age += dt;
-      if (d.age > LIFE) return false;
-      // Caída
-      d.vy -= GRAVITY * dt;
+      const inWater = w.get(Math.floor(d.x), Math.floor(d.y), Math.floor(d.z)) === WATER;
+      d.vy -= (inWater ? 4 : GRAVITY) * dt;
+      if (inWater) d.vy = Math.max(d.vy, -1.5);
+      // Horizontal: se para contra los bloques.
+      const nx = d.x + d.vx * dt, nz = d.z + d.vz * dt;
+      if (w.solidAt(Math.floor(nx), Math.floor(d.y - HALF), Math.floor(d.z))) d.vx = 0;
+      else d.x = nx;
+      if (w.solidAt(Math.floor(d.x), Math.floor(d.y - HALF), Math.floor(nz))) d.vz = 0;
+      else d.z = nz;
+      // Vertical: se apoya encima del bloque o choca con el de arriba.
       const ny = d.y + d.vy * dt;
-      if (w.solidAt(Math.floor(d.x), Math.floor(ny), Math.floor(d.z))) {
-        d.y = Math.floor(ny) + 1.01;
+      let ground = false;
+      if (d.vy < 0 && w.solidAt(Math.floor(d.x), Math.floor(ny - HALF), Math.floor(d.z))) {
+        d.y = Math.floor(ny - HALF) + 1 + HALF;
+        d.vy = 0;
+        ground = true;
+      } else if (d.vy > 0 && w.solidAt(Math.floor(d.x), Math.floor(ny + HALF), Math.floor(d.z))) {
         d.vy = 0;
       } else {
         d.y = ny;
       }
-      // Deriva con rozamiento
-      d.vx *= 1 - Math.min(1, dt * 6);
-      d.vz *= 1 - Math.min(1, dt * 6);
-      const nx = d.x + d.vx * dt;
-      if (!w.solidAt(Math.floor(nx), Math.floor(d.y), Math.floor(d.z))) d.x = nx;
-      else d.vx = 0;
-      const nz = d.z + d.vz * dt;
-      if (!w.solidAt(Math.floor(d.x), Math.floor(d.y), Math.floor(nz))) d.z = nz;
-      else d.vz = 0;
-      // ¿A mano?
-      if (d.age > PICK_DELAY && Math.hypot(d.x - px, d.y - cy, d.z - pz) < PICK_RADIUS) near.push(d);
-      return true;
-    });
-    return near;
+      // Si le ponen un bloque encima, sube a la superficie.
+      if (w.solidAt(Math.floor(d.x), Math.floor(d.y), Math.floor(d.z)) && d.y >= 0) d.y = Math.floor(d.y) + 1 + HALF;
+      const fr = Math.exp(-(ground ? 8 : 0.5) * dt);
+      d.vx *= fr;
+      d.vz *= fr;
+    }
+    this.list = this.list.filter((d) => d.age < LIFETIME && d.y > -5 && d.n > 0);
+    this.merge();
   }
 
-  remove(d: Drop) {
-    const i = this.list.indexOf(d);
-    if (i >= 0) this.list.splice(i, 1);
+  /** Junta montones iguales que están juntos (menos objetos que mover y que dibujar). */
+  private merge() {
+    for (let i = 0; i < this.list.length; i++) {
+      const a = this.list[i];
+      const max = itemInfo(a.item).max;
+      if (a.n >= max || a.age < PICK_DELAY) continue;
+      for (let j = i + 1; j < this.list.length; j++) {
+        const b = this.list[j];
+        if (b.item !== a.item || b.n <= 0 || b.age < PICK_DELAY) continue;
+        if (Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) > MERGE_RADIUS) continue;
+        const k = Math.min(b.n, max - a.n);
+        a.n += k;
+        b.n -= k;
+        if (a.n >= max) break;
+      }
+    }
+    this.list = this.list.filter((d) => d.n > 0);
   }
 
-  clear() {
-    this.list = [];
+  /**
+   * Reparte los objetos cercanos. `take(index, item, n)` mete en el inventario de ese jugador lo que
+   * quepa y devuelve cuántos se ha quedado; el resto sigue en el suelo.
+   */
+  collect(players: Picker[], take: (index: number, item: number, n: number) => number) {
+    for (const d of this.list) {
+      for (const p of players) {
+        const wait = p.index === d.owner ? OWNER_DELAY : PICK_DELAY;
+        if (d.age < wait || d.n <= 0) continue;
+        const dy = d.y - (p.y + 0.9);
+        if (Math.hypot(d.x - p.x, d.z - p.z) > PICK_RADIUS || Math.abs(dy) > 1.4) continue;
+        d.n -= take(p.index, d.item, d.n);
+      }
+    }
+    this.list = this.list.filter((d) => d.n > 0);
   }
 }

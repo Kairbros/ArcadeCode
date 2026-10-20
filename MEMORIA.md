@@ -1,4 +1,4 @@
-# Memoria del proyecto: Arcade (Bomberman, Karts, Sumo de bolas, Monigotes, Ruleta de cartuchos y Bloques)
+# Memoria del proyecto: Arcade (Bomberman, Karts, Sumo de bolas, Monigotes, Ruleta de cartuchos, Bloques y Casino de deudas)
 
 Guía para quien vaya a extender el proyecto (persona o agente). Resume decisiones, contratos, despliegue
 y trampas conocidas. El README cubre el uso; este documento, el porqué y el cómo extender.
@@ -9,7 +9,8 @@ y trampas conocidas. El README cubre el uso; este documento, el porqué y el có
   (vista "Arcade" en el Explorador). Juegos: **Bomberman**, **Karts** (3D con relieve),
   **Sumo de bolas** (3D), **Monigotes** (peleas en plataformas) y **Ruleta de cartuchos**
   (escopeta por turnos contra un crupier, en 3D; inspirado en un juego indie, con nombre propio) y
-  **Bloques** (mundo de bloques en primera persona tipo Minecraft, con nombre propio; de momento creativo).
+  **Bloques** (mundo de bloques en primera persona tipo Minecraft, con nombre propio; creativo y supervivencia) y
+  **Casino de deudas** (casino cooperativo con banco común y cuota diaria; inspirado en un juego indie, con nombre propio).
 - **Pantalla muy pequeña**: se juega sobre todo en la barra lateral de VS Code (~180–300 px de ancho).
   Todo el UI (menú, HUD) debe funcionar ahí. El lienzo escala el tamaño lógico del juego.
 - **Red corporativa**: los equipos de la oficina pueden no verse entre sí. Por eso la conexión es
@@ -85,11 +86,12 @@ src/game/core/three.ts     3D compartido: un solo WebGLRenderer (`glRenderer`), 
 src/game/stick/            config, stages, fight (física+armas+bots+árbitro), input, render (poses por código), game
 src/game/ruleta/           config, match (reglas+árbitro), bot, state (estado de red), input (teclas+selector),
                            math3d (vectores/giros), textures (generadas), models (Three.js), render (escena+HUD), game
-src/game/blocks/           config, blocks (tipos, dureza y objetos que sueltan), items (objetos y herramientas),
-                           world (generación+rayo+diff), mesher (chunks), player (física), pilot (jugador propio),
-                           mining (dureza), drops (objetos en el suelo), inventory (mochila), crafting (recetas),
-                           survival (vida y aire), ui (panel de mochila y fabricación), atlas e icons (iconos),
-                           save (mundo y jugador locales), input (teclado+ratón), render (Three.js+HUD), game
+src/game/blocks/           config, blocks (tipos), world (generación con cuevas y menas+luz+rayo+diff), mesher (chunks), player (física),
+                           pilot (jugador propio), atlas (texturas), input (teclado+ratón), render (Three.js+HUD), game;
+                           supervivencia: items, inventory, crafting (recetas), craftui (pantalla con ratón), icons,
+                           drops (objetos en el suelo, solo en el anfitrión), mobs (animales, solo en el anfitrión),
+                           vitals (vida, hambre y aire de cada jugador, local),
+                           furnace (hornos de cada jugador, local), daycycle (reloj del día)
 ```
 
 ### Contrato de red (lo que un juego debe implementar) — `src/game/net/types.ts`
@@ -104,7 +106,7 @@ src/game/blocks/           config, blocks (tipos, dureza y objetos que sueltan),
 - **Bots** (`settings.bots`, ajuste `arcade.bots`, botón del menú): con bots la IA rellena hasta 4 en Karts y
   Sumo; sin ellos solo juegan las personas (solo = contrarreloj / aguantar 60 s). En red vale el del anfitrión
   (`createHostGame`). Los enemigos de Bomberman no son bots: no les afecta. Afecta a Karts, Sumo y Monigotes;
-  en Ruleta de cartuchos sienta al crupier (un solo bot), que en solitario se sienta siempre. Bloques no tiene bots.
+  en Ruleta de cartuchos sienta al crupier (un solo bot), que en solitario se sienta siempre. Bloques y Casino no tienen bots.
 - **Nombres** (`core/names.ts`): `PLAYER_NAMES` es mutable y los juegos lo leen al dibujar. El nombre se elige en el
   menú (ajuste `arcade.playerName` o localStorage, máx. 12). El invitado lo manda en `{t:"hello"}` (directo) y
   como campo `nm` en sus mensajes hasta verlo en `snap.n`, la lista que `HostSession.stamp` añade a cada estado.
@@ -251,129 +253,180 @@ src/game/blocks/           config, blocks (tipos, dureza y objetos que sueltan),
 - Mundo fijo de `WX×WY×WZ` = 96×48×96 en un `Uint8Array` (`world.ts`), generado desde la semilla con ruido de valor
   fractal (`fbm`): llanura + colinas + montes (cima de piedra si h > 30), agua hasta `SEA` (17), arena solo en la
   orilla y el fondo (h ≤ SEA), árboles por `hash3`. Roca madre en y = 0. Bordes: pared invisible (`solidAt`).
-  13 tipos en `blocks.ts` (`BLOCKS`: casillas del atlas arriba/lado/abajo, `solid`, `opaque`). La barra es de cada
-  jugador (`Pilot.slots`, 9 casillas): el botón central copia a ella el bloque apuntado (si ya estaba, salta a su
-  casilla) y en el HUD se ve qué se lleva y qué se mira. El inventario con cantidades y el crafteo siguen pendientes.
+  19 tipos en `blocks.ts` (`BLOCKS`: casillas del atlas arriba/lado/abajo, `solid`, `opaque`, `light`, `shape`). La
+  barra del creativo (`HOTBAR`) es fija (con antorchas).
+- **Cuevas y menas** (petición del usuario 2026-10-20, con horno, minerales y antorchas), con `Rng(semilla·7+3)` tras el
+  relieve: primero vetas que solo sustituyen piedra (`ores`: carbón 130 vetas de 9 hasta y 44, hierro 90 de 6 hasta
+  y 30, diamante 16 de 4 hasta y 10), luego 18 túneles serpenteantes (`caves`: radio 1,3–2,5, 50–140 pasos, alguna
+  sala de radio 3,5–5,3; los 6 primeros empiezan en la superficie y bajan: son las entradas) y por último los árboles.
+  No se vacía nada pegado al agua (nunca queda agua sobre un hueco) ni la roca madre. ~25 ms el mundo entero.
+- **Luz** (`world.light`: cielo en los 4 bits altos, antorchas en los bajos, 0–15): el cielo baja recto por cada
+  columna hasta lo opaco (hojas y agua restan 1) y luego se reparte como la de las antorchas (14): −1 por bloque, −2
+  por hojas y agua, con una cola por niveles (cada casilla se fija una vez). Es perezosa: `set` apunta la zona
+  (±15 en x y z, toda la altura) y `flushLight` la recalcula (la llama el render antes de mallar); la luz de fuera de
+  la zona entra por el borde. Solo se marcan los chunks donde la luz cambió. Tiempos (solo, en Node): todo el mundo
+  ~35 ms, un cambio ~2 ms. Las simulaciones en Node no la calculan nunca.
 - `world.diff` guarda los bloques distintos de los generados (para la base de red) y `world.dirty`, los chunks que
   hay que rehacer. El jugador aparece en tierra seca (`dryColumn`, en espiral desde el centro).
 - Malla (`mesher.ts`, código puro): chunks de 16×48×16, solo caras visibles, oclusión ambiental por vértice
-  (`AO_LEVEL`) y luz fija por cara horneadas en el color del vértice. Cada cuadrado se parte por la diagonal de las
+  (`AO_LEVEL`), sombra fija por cara y la luz del mundo horneadas en el color del vértice: la luz es la media de las
+  casillas de delante que no tapan (suave), con la curva `brightness` (a oscuras casi negro) y la de las antorchas
+  en tono cálido (`WARM`). Las antorchas son un palito de 2/16 (en una pared, inclinado con el pie pegado a ella,
+  según `torchSupport`) y siempre brillan. Cada cuadrado se parte por la diagonal de las
   esquinas oscuras (al revés salían triángulos claros sueltos). El agua va aparte (transparente, superficie a 0,88).
-  Antes de recorrer el chunk se copia a un `Uint8Array` con una capa de un bloque de margen (`fillPadded`, búfer
-  reutilizado), así la oclusión son lecturas de array en vez de ~300.000 `world.get` con comprobaciones de límites:
-  1,4 ms por chunk (1,17× más rápido) y la malla sale **idéntica** a la anterior (comprobado casilla a casilla en
-  5 semillas). La carga inicial se reparte (`CHUNKS_PER_FRAME`) y los cambios se rehacen al momento.
+  ~4 ms por chunk; la carga inicial se reparte (`CHUNKS_PER_FRAME`) y los cambios se rehacen al momento.
 - Render: `MeshBasicMaterial` con el atlas (`NearestFilter`, sin mipmaps, `alphaTest` para hojas y cristal,
-  `toneMapped: false`): el mundo no usa luces ni sombras (barato). Solo los muñecos de los demás llevan luz.
-  Atlas 4×4 de 16 px dibujado píxel a píxel (`atlas.ts`). Icono isométrico de la barra: `drawBlockIcon`.
+  `toneMapped: false`): el mundo no usa luces ni sombras (barato). Solo los muñecos y animales llevan luz, y sus
+  materiales se oscurecen según la luz de donde están (`brightnessAt`, `shadeMaterials`).
+  Atlas de `ATLAS_COLS×ATLAS_ROWS` = 8×4 casillas de 16 px dibujado píxel a píxel (`atlas.ts`; para una casilla nueva,
+  su `T_...` en `blocks.ts` y su caso en `pixel`). Icono isométrico de la barra: `drawBlockIcon` (la antorcha, plana).
   Son cubos de 1 m: encaja con la regla 6e (no son vóxeles finos).
-- Física (`player.ts`): caja de 0,6×1,8, eje a eje en pasos ≤ 0,45 y pegada a la cara al chocar; nado; vuelo (F);
-  correr con Shift (`SPRINT`, 6,6 en vez de 4,3, solo andando). Shift es también "bajar volando": el vuelo manda.
-  **No usar Ctrl para correr**: Ctrl+W cierra la pestaña en el navegador.
-- Ratón en tres modos (`lookMode()` en `input.ts`): **locked** (puntero capturado: mover mira, clic rompe),
-  **drag** (la vista no deja capturarlo, p. ej. la webview de VS Code: arrastrar con el botón izquierdo mira y un
-  clic sin arrastrar —≤ 4 px— rompe) y **click** (aún no se ha pedido; el primer clic captura). Si el navegador
-  rechaza la captura (`pointerlockerror` o 400 ms sin capturar), se pasa a arrastrar sin tocar nada. El clic que
-  captura el puntero no rompe nada; los botones sueltan al salir de la ventana. `releasePointer` al abrir el menú.
-  Botón central: copiar el bloque apuntado. Sin ratón: flechas para mirar y Q/E para romper/poner.
+- Física (`player.ts`): caja de 0,6×1,8, eje a eje en pasos ≤ 0,45 y pegada a la cara al chocar; nado; vuelo (F).
+- Ratón: `pointer lock` al hacer clic en el lienzo (`input.ts`; las escuchas se enganchan una sola vez y no tocan el
+  DOM hasta el primer `poll`); `releasePointer` al abrir el menú o el selector. Sin ratón: flechas para mirar y Q/Enter.
+  **La webview de VS Code sí captura el puntero** (lo confirmó el usuario el 2026-10-19): el juego se diseña con ratón.
+- Dos entradas en el hub con las mismas clases: `"blocks"` (creativo) y `"survival"` (`BlocksMode`; el `snap.g` y el
+  `id` del invitado dicen cuál). Esc pasa primero por `escape()` del juego (`HostGame`/`GuestGame`/`Screen`, opcional):
+  si cierra un inventario, no se sale al menú.
+- **Supervivencia** (petición del usuario: "lo básico, romper, craftear"):
+  - Romper: mantener; el progreso es `dt × velocidad / BLOCKS[b].hard` (s a mano). Con la herramienta de su `tool`,
+    `TOOL_SPEED` (madera ×5, piedra ×9, hierro ×12, diamante ×16). `needsTier`: sin una herramienta de ese nivel se
+    rompen pero no sueltan (`dropOf(b, nivel)`): piedra, adoquín, ladrillo, carbón y horno piden pico de madera, el
+    hierro de piedra y el diamante de hierro. Hierba → tierra, piedra → adoquín, carbón → carbón, hierro → la mena
+    (se funde), diamante → diamante, hojas y cristal → nada. Menas: 15 s a mano (pico de piedra 1,7 s). Grietas: tira de 5 fases (`crackCanvas`)
+    en una caja algo mayor que el bloque. Medido: tronco a mano 3 s, piedra a mano 7,5 s, con pico de madera 1,5 s.
+  - **Objetos en el suelo** (`drops.ts`): lo roto cae como cubito (bloques) o sprite (palos, herramientas), flota y
+    gira; se recoge a ≤ 1,5 bloques tras 0,4 s (quien lo tiró, tras 1,5 s). Q tira uno (Ctrl+Q el montón); clic fuera
+    del panel del inventario tira lo que llevas en la mano; lo que no cabe al cerrar el inventario también se tira.
+    Montones iguales cercanos se juntan; caducan a los 300 s; máx. `MAX_DROPS` (96, se quita el más viejo).
+    **Solo los simula el anfitrión** y él decide quién recoge cada uno: al romper, el cambio lleva lo que suelta
+    (6.º número); tirar viaja en la misma cola de acciones del invitado (`[k, -1, objeto, cantidad, 0, 0]`). Al
+    invitado se le entrega lo recogido como `gr` (lista numerada por jugador) hasta que confirma con `g`; si no le
+    cabe, lo vuelve a tirar. Al desconectarse, sus entregas sin confirmar vuelven al suelo. El estado lleva los
+    objetos en `dr` (id, objeto, cantidad, x, y, z). Probado: simulación de 10 min con anfitrión + invitado
+    rompiendo, poniendo y tirando al azar, por directo y por relé con pérdidas: soltados = puestos + inventarios +
+    suelo + caducados, exacto (no se duplica ni se pierde nada).
+  - Poner gasta una unidad.
+  - **Animales** (`mobs.ts`, petición del usuario 2026-10-20: "vacas, cerdos, etc. que se puedan matar"): vaca,
+    cerdo, oveja y gallina (`MOBS`: tamaño, vida 10/10/8/4, velocidad paseando/huyendo, botín). Usan la física
+    del jugador con su caja (`stepBody(..., size)` y `Move.speed`). Pasean (45 % anda, 2–6 s por decisión),
+    saltan escalones de 1, giran ante paredes y, paseando, no se meten en el agua ni bajan más de 3 bloques; la
+    gallina cae despacio. Aparecen `MOB_TARGET` (16) en manadas de 2–4 sobre hierba, deterministas con la semilla
+    (`populate`); cada `RESPAWN_EVERY` (20 s), si faltan, sale otra manada a ≥ `SPAWN_MIN_DIST` (20) de los
+    jugadores. Golpe (`hit`): resta vida, empuja, destello rojo `HURT_TIME` (0,4 s, sin recibir más golpes) y huye
+    `PANIC_TIME` (5 s); al morir suelta el botín en `drops` y cae de lado `DEATH_TIME` (0,8 s). Daño
+    (`attackDamage`): a mano 1, espada 4/5, hacha 3/4, pico y pala 2/3. Botín: ternera 1–3 + cuero 0–2, chuleta
+    1–3, cordero 1–2 + lana 1, pollo 1 + plumas 0–2.
+  - Golpear: `Pilot` lanza el rayo a los animales (`rayMobs`, caja algo mayor) hasta `ATTACK_REACH` (3,5) o el
+    bloque apuntado; si da a uno, `mobTarget` tapa al bloque. Un clic (o mantener) golpea cada `ATTACK_COOL`
+    (0,45 s); los golpes salen en `pilot.hits` y el juego aplica el daño de lo que hay en la mano. En red el
+    invitado los manda en su cola como `[k, -2, animal, objeto]`; el anfitrión calcula el daño y exige que esté a
+    `ATTACK_REACH + 2,5`. El invitado se ve el destello al momento (`flash`). Estado: `mb` (id, tipo, x, y, z,
+    guiñada, 0/1 golpeado/2 muerto), ~1,3 KB con 17 animales.
+  - Modelos (`buildBeast` en `render.ts`): cajas con `MeshLambertMaterial` propios de cada animal (el destello es
+    `emissive`); patas en cruz, la cabeza baja a pastar parado. Para añadir uno: entrada en `MOBS`, su rama en
+    `buildBeast` y, si suelta algo nuevo, el objeto en `items.ts` y su dibujo en `LOOT` de `icons.ts`.
+  - **Vida y hambre** (`vitals.ts`, petición del usuario 2026-10-20: "daño, vida y hambre"), como el modo normal de
+    Minecraft: 20 de vida y 20 de hambre (10 iconos), 10 burbujas de aire. Daño: caída de más de `SAFE_FALL` (3)
+    bloques, 1 por bloque (el agua la anula; se mide desde lo más alto del salto); sin aire, 2 por segundo; con el
+    hambre a 0, 1 cada 4 s hasta dejar 1 de vida (el hambre no mata). El hambre baja por cansancio (4 = un punto):
+    0,05/s parado (un punto cada 80 s), 0,03 por bloque andado, 0,1 por salto o golpe, 0,025 por bloque roto. Con
+    hambre ≥ 18 se cura 1 cada 4 s (cuesta 3 de cansancio). Comer: clic derecho mantenido `EAT_TIME` (1,6 s) con
+    comida en la mano (`itemInfo(id).food`, como Minecraft: ternera y chuleta crudas 3, cordero y pollo crudos 2;
+    filete y chuleta asada 8, cordero y pollo asados 6). Daño: pantalla roja y cámara ladeada `HURT_FLASH` (0,5 s).
+  - **Morir** (`Pilot.die`): cierra la pantalla abierta y suelta todo el inventario a sus pies (`throws` con
+    `spill`); la cámara cae al suelo con el cartel "HAS MUERTO". Tras `RESPAWN_DELAY` (1 s), ESPACIO o clic: vuelve a
+    su punto de salida con todo lleno. La vida y el hambre son locales (como el inventario); por la red solo va
+    que está muerto: el invitado lo dice con `d: 1` y suelta lo suyo en su cola (`[k, -1, objeto, cantidad, 1, 0]`).
+    Mientras está muerto, el anfitrión no lo dibuja (fila de `p` vacía) ni le da objetos. El invitado no reaparece
+    hasta que el anfitrión ha confirmado lo soltado (`holdRespawn`): así cae donde murió y no en el punto de salida.
+  - HUD: corazones a la izquierda y muslos a la derecha encima de la barra, burbujas encima de los muslos bajo el
+    agua (iconos de 7×7 dibujados con `pixels` en `render.ts`); tiemblan con poca vida o sin hambre; barrita bajo la
+    cruz al comer. El nombre del objeto y los avisos suben por encima; la etiqueta de red va bajo los jugadores.
+  - **Monstruos** (`mobs.ts`, petición del usuario 2026-10-20: "mobs hostiles", con el ciclo de día y noche): zombi
+    (20 de vida, pega 3), esqueleto (20, flechas de 3 cada 2 s hasta 14 bloques; se aparta si te acercas a menos de
+    5), araña (16, pega 2, salta hacia ti) y petardo (20; a menos de `FUSE_DIST` se enciende `FUSE_TIME` 1,5 s y
+    explota: rompe bloques en radio `BOOM_RADIUS` 2,6 —un 30 % suelta algo—, hasta 14 de daño a 6 bloques y empuje;
+    si te alejas, se apaga). Persiguen al jugador vivo más cercano a ≤ `FOLLOW_DIST` (16) y solo pegan o disparan si
+    lo ven (rayo entre los ojos: una pared protege). Aparecen cada 0,5 s (máx. `HOSTILE_MAX` 10) a 16–36 bloques de
+    un jugador, sobre bloque opaco con 2 de hueco y con luz ≤ `SPAWN_LIGHT` (7) contando el cielo según la hora
+    (`Mobs.lightNow`, `skyLevel`: de noche el cielo pleno vale 4): de noche fuera y siempre en las cuevas; las
+    antorchas (14) lo impiden alrededor. Zombis y esqueletos arden a pleno sol (1/s). Desaparecen a más de 48 de
+    todos. Sueltan carne podrida (se come, 2), hueso, flecha, hilo o pólvora (sin uso todavía). Sus golpes salen en
+    `mobs.events` (`hurt`, `boom`) y los aplica el juego: `hurtPlayer` (0,5 s de respiro por jugador; al anfitrión
+    directamente con `Pilot.knock`) y `explode` (rompe bloques con `apply`, como cambios del registro). Modelos de
+    cajas en `buildBeast`; el petardo encendido parpadea en blanco y se hincha, los que arden brillan en naranja.
+    En las pruebas que no los quieren: `mobs.hostiles = false`.
+  - **Día y noche** (`daycycle.ts`): `DAY_LENGTH` 600 s, empieza por la mañana (`MORNING`). `daylight` (0–1) sale de la
+    altura del sol; el anfitrión lleva el reloj (también en creativo) y viaja en cada estado (`dc`). Render: la
+    malla guarda aparte la luz del cielo (color) y la de las antorchas (`blockLight`) y el shader (`skyLit`,
+    `onBeforeCompile`) multiplica la del cielo por `skyFactor` (de `NIGHT_SKY` 0,2 a 1) y se queda con la mayor: la
+    noche no rehace mallas. Cielo y niebla pasan de azul a noche con atardecer anaranjado; bajo tierra se apagan
+    (`cave`). Sol y luna giran alrededor de la cámara y hay estrellas de noche; las luces de los muñecos siguen al sol
+    o a la luna, y animales, monstruos y muñecos se oscurecen con `brightnessAt(..., skyFactor)`.
+  - Red de los monstruos: van en `mb` con estado 3 (mecha) y 4 (ardiendo); flechas en `ar` y explosiones recientes en
+    `bx` (para dibujarlas). Un golpe a un invitado va en `hd` (id, daño, empuje) hasta que lo confirma con `hk`; se
+    aplica una sola vez. Probado en la prueba de red, que en supervivencia empieza a medianoche.
+  - Inventario (`inventory.ts`): 36 ranuras (0–8 barra), montones según `itemInfo(id).max` (herramientas 1). Objetos
+    (`items.ts`): los bloques con su número y, desde 100, palo, herramientas (sin durabilidad todavía) y lo que
+    sueltan los animales.
+  - Crafteo (`crafting.ts`): recetas con forma, recortadas al bloque usado y aceptadas reflejadas. 2×2 desde el
+    inventario (E/Tab/I) y 3×3 con clic derecho sobre una mesa de trabajo (bloque `TABLE`, casillas 14–15 del atlas).
+    Recetas: tronco → 4 tablones, 2 tablones → 4 palos, 4 tablones → mesa, 8 adoquines en anillo → horno, carbón (o
+    carbón vegetal) sobre palo → 4 antorchas y pico/hacha/pala/espada de tablones, adoquín, lingote de hierro o
+    diamante (`tools`). Para añadir una: una línea en `RECIPES`. Lo que se funde va en el horno (`SMELT`).
+  - **Horno** (`furnace.ts`, bloque `FURNACE`, clic derecho): entrada, combustible y salida. `SMELT`: mena de hierro →
+    lingote, arena → cristal, adoquín → piedra, tronco → carbón vegetal, carne cruda → cocinada; `SMELT_TIME` 5 s por
+    objeto. `FUEL` (s de fuego): carbón y carbón vegetal 40 (8 objetos), tronco/tablón/mesa 7,5, palo 2,5, herramientas
+    de madera 5. Solo enciende otro combustible si hay algo que fundir; sin fuego lo fundido a medias se enfría. Es
+    **de cada jugador**, como el inventario: `Pilot.furnaces` ("x,y,z" → `Furnace`), y todos funcionan aunque la
+    pantalla esté cerrada; por la red solo va el bloque. Si alguien rompe el horno, lo de dentro vuelve al inventario
+    de su dueño (o al suelo si no cabe). La pantalla es la de crafteo (`Crafter` con `size = "furnace"`): sus ranuras
+    son las del horno (no se vacían al cerrar), la salida solo se coge, Mayús+clic desde el inventario manda a la
+    entrada lo que se funde y al combustible lo que arde; llama y flecha de progreso.
+  - **Antorchas** (`TORCH`, luz 14): no chocan; se ponen apoyadas en el suelo o en una pared (`torchSupport`; lo
+    comprueban el piloto y `validEdit`). Al romper un bloque, el anfitrión tira las antorchas que se quedan sin apoyo
+    como un cambio más del registro (sueltan la antorcha).
+  - Pantalla (`craftui.ts`, `Crafter`): con ratón como en Minecraft (clic coge/deja/junta/cambia, clic derecho la
+    mitad/uno, Mayús+clic mueve barra ↔ mochila o fabrica todo). Con la pantalla abierta, `setUi(true)` suelta el
+    puntero y los clics llegan en unidades lógicas (`logical`, con `getBoundingClientRect`); al cerrar, lo de la
+    cuadrícula y la mano vuelve al inventario. Para volver a mirar con el ratón hay que hacer clic otra vez (el
+    navegador solo deja capturar el puntero tras un clic).
+  - El inventario es local de cada jugador (no viaja por la red ni se guarda); la red solo lleva los bloques.
+  - Probado: en Node el ciclo completo con clics reales sobre las ranuras (talar, tablones, palos, mesa, ponerla,
+    usarla, pico, piedra con y sin pico), la red en los dos modos y capturas de grietas, barra e inventario.
 - Red: cada uno mueve a su jugador (sin retraso). Cambios de bloques: el anfitrión los numera (`n`) en un registro y
-  cada estado lleva **solo los que algún invitado no ha aplicado** (cada invitado manda en `q` el último `n` que
-  tiene; el anfitrión guarda `ackN` por invitado). Así, con todos al día el estado baja de ~880 a ~185 caracteres
-  (medido en la simulación) y el registro se poda por debajo del mínimo confirmado. El invitado predice los suyos y
-  los reenvía con su `k` hasta verlos en `ak`; si le faltan cambios, usa la base (`{seq, sd, n, d}` = diff completo,
-  renovada como mucho cada `REBASE_EVERY` s si hubo cambios). **La base lleva la semilla (`sd`)**: sin ella, al
-  cambiar de juego una base del mundo anterior se aplicaba al mundo nuevo (fallo corregido). Máximo de cambios
-  propios sin confirmar: `MAX_PENDING` (no se aceptan más para que la numeración `k` no tenga huecos). Mensaje
-  `{t:"m",x,y,z,a,p,h,e,q,s}` ≤ ~160 caracteres. `finished` siempre es true.
-- **Guardado local** (`save.ts`): en `mode === "local"` la semilla va a `arcade.blocks.seed` y los cambios a
-  `arcade.blocks.diff` (cada `SAVE_EVERY` s si cambiaron, tope `SAVE_MAX_BLOCKS`). Al entrar se retoma el mismo
-  mundo (semilla + diff); **N dos veces en 4 s** borra el guardado y genera otro mundo (una sola N solo avisa en el
-  HUD). En red no se guarda: manda el anfitrión. Si localStorage no está o está lleno, se juega igual sin guardar.
-- Probado (2026-10-19): simulación en Node de anfitrión + invitado editando al azar por directo y por relé con
-  pérdidas (mundos idénticos al final, mensajes ≤ 118 caracteres, estados ≤ 185), y aparte el caso de cambiar de
-  mundo con una base vieja (se ignora). Malla idéntica a la anterior en 5 semillas. En Chrome contra `npm run serve`:
-  menú → Bloques a 60 fps, romper y poner (sin captura de puntero: modo arrastre), botón central copiando el bloque
-  apuntado (la marca blanca salta a la casilla del bloque), guardado en localStorage, recarga (mismo mundo, mismos
-  cambios) y N dos veces (semilla nueva, diff vacío y sin errores). SwiftShader va a ~3,5 fps: las pulsaciones
-  cortas se pierden ahí, así que en las pruebas hay que mantener las teclas ≥ 0,4 s.
+  cada estado lleva los últimos `EDITS_IN_SNAP` (`ed`). El invitado predice los suyos y los reenvía con su `k` hasta
+  verlo en `ak`; si le faltan cambios, usa la base (`{seq, n, d}` = diff completo, renovada como mucho cada
+  `REBASE_EVERY` s si hubo cambios). Mensaje `{t:"m",x,y,z,a,p,h,e,s}` ≤ ~160 caracteres. `finished` siempre es true.
+  La base crece ~16 caracteres por bloque cambiado (con el límite del relé de 200.000, unos 12.000 bloques).
+- Probado: `npm test` (test/blocks-*.test.ts: supervivencia completa, objetos del suelo, animales, vida y hambre,
+  red creativo y supervivencia por directo y por relé con pérdidas y muertes al azar: mundos idénticos, todo
+  confirmado, objetos que cuadran, mismos animales; mundo: cuevas, menas, luz, antorchas y horno) y
+  `npm run shot -- test/browser/survival.mjs`, `mobs.mjs`, `vitals.mjs`, `caves.mjs` o `night.mjs` (capturas). Los
+  monstruos y la hora, en test/blocks-hostile.test.ts. El primer clic de CDP sí captura el puntero en Edge sin ventana.
 
-## 6h. Bloques: supervivencia (2026-10-19)
+## 6h. Casino de deudas (claves) — versión sencilla, se irá ampliando
 
-El modo se elige al empezar (menú → Bloques → Supervivencia / Creativo; en red lo decide el anfitrión y
-viaja en el estado como `md`). Creativo es lo de antes (bloques infinitos, vuelo, rotura instantánea).
+Petición del usuario (2026-10-19): algo como *Gamble With Your Friends* (casino cooperativo de 2026), empezando simple.
 
-- **Vida** (`survival.ts`): 20 puntos = 10 corazones. Daño por caída (1 punto por bloque a partir de 3,5),
-  por ahogarse (12 s de aire y luego 3 puntos/s), por inanición y por las manzanas que curan 4. Al llegar
-  a 0 se muere: pantalla «HAS CAÍDO», 2,4 s y se reaparece en el punto de inicio con la vida llena
-  **conservando la mochila**.
-- **Hambre** (`survival.ts`, 10 muslos = 20 puntos): se gasta andando (0,02/s), quieto (0,012/s) y
-  corriendo (0,06/s). A 0 se pierde 1,5 puntos de vida por segundo; por encima de 16 se recupera vida
-  sola (0,35/s) gastando un poco de hambre. Se come con el clic derecho sobre cualquier bloque: manzana
-  (+4 hambre, +4 vida), carne cruda (+3, +1) y carne asada (+7, +3). No se come estando lleno (no se
-  gastan objetos). El hambre se guarda con la vida en `arcade.blocks.player`.
-- **Animales** (`mobs.ts` + `render.ts`): vacas y cerdos de bloques (cuerpo, cabeza, morro, orejas y
-  cuatro patas que se balancean). Aparecen 7 al empezar, sobre hierba, entre 6 y 20 bloques. Andan a su
-  aire (1,15 m/s, rumbo nuevo cada 1,5–5 s), tienen gravedad y saltan escalones de un bloque; nadan si
-  caen al agua. Son **de cada jugador** (no viajan por la red, como los objetos del suelo).
-- **Espada y combate**: el clic izquierdo pega si el rayo de la vista corta a un animal (dos esferas por
-  bicho, lomo y panza, radio 0,8 y 3,2 bloques de alcance) y hay que estar más cerca que el bloque
-  apuntado. Puño 1 de daño, espada de madera 3, piedra 4, hierro 5; 0,45 s entre golpes y la espada
-  gasta un uso por golpe. Los animales tienen 10 de vida: al recibir un golpe huyen 3,5 s a 2,2 m/s
-  (se les alcanza andando). Al morir sueltan 1–2 de carne cruda.
-- **Hierro** (`blocks.ts` `IRON_ORE`/`FURNACE`, `crafting.ts`): la mena de hierro (dureza 1,6) solo suelta
-  objeto con pico; en el horno (8 adoquines) se funde 1 mena → 1 lingote gastando **1 combustible**
-  (palo, tablón o tronco, del más barato al más caro). También se asa carne. Las herramientas de hierro
-  son nivel 2 (6,5×, 250 usos) y las espadas de hierro pegan 5. El horno es **sin estado**: no guarda
-  nada, se funde desde la mochila estando a menos de 4 bloques (el jugador lo comprueba cada 0,5 s).
-- **Panel** (`ui.ts`): dos pestañas, **FABRICAR** (15 recetas) y **HORNO** (2), con 8 recetas por página y
-  flechas `‹ ›` para pasar; la pestaña HORNO sale atenuada si no hay horno cerca. El aviso de abajo
-  cambia según la pestaña y el combustible.
-- **Dureza y herramientas** (`blocks.ts` + `mining.ts`): cada bloque tiene `hardness` (segundos con la
-  herramienta buena de nivel 1) y `tool` (pick/axe/shovel). Con la herramienta correcta se tarda
-  `hardness / speed` (madera 2,2×, piedra 4,2×); con la equivocada o a mano, 2,5× más. Piedra, adoquín y
-  ladrillo **no sueltan nada** sin pico (`req: 0`); el resto suelta siempre. Medido: piedra 2,25 s a mano,
-  0,41 s con pico de madera, 0,21 s con el de piedra.
-- **Minar**: mantener el clic (o Q) llena una barra bajo la cruz; al soltar, el progreso se guarda
-  `MINING_GRACE` (0,35 s), así minar a clics también avanza (si no, un clic corto no hacía nada). El
-  bloque se rompe cuando el progreso llega a 1.
-- **Objetos** (`items.ts`, `drops.ts`): los bloques rotos sueltan su objeto (hierba → tierra, piedra →
-  adoquín), las hojas tienen un 12 % de manzana. Caen con gravedad, giran, y se recogen al pasar cerca
-  (< 1,5 bloques, 0,35 s de espera). Son **locales de cada jugador** (no viajan por la red): cada uno ve
-  los suyos, igual que su inventario.
-- **Herramientas**: pico, hacha y pala de **madera** (2,2×, 60 usos) y de **piedra** (4,2×, 132 usos).
-  Cada bloque roto gasta un uso; al llegar a 0 la herramienta desaparece. La barra de la casilla muestra
-  el desgaste (verde → amarillo → rojo).
-- **Mochila** (`inventory.ts`): 9 casillas de barra + 27 de mochila, montones de hasta 64 (herramientas de
-  1). Se abre con **I** o **C** (panel `ui.ts`); se coge un montón con un clic y se suelta con otro
-  (juntar si es el mismo objeto, intercambiar si no). Mientras está abierto no se mira ni se rompe nada y
-  **Esc cierra el panel** en vez de volver al menú (`escape()` en el contrato de red, main.ts lo consulta
-  antes de salir). Al cerrar con algo en el cursor, se guarda en la mochila; si no cabe, no cierra.
-- **Fabricación** (`crafting.ts`): en vez de rejilla 3×3 (no cabe bien en 320×240) hay una **lista de
-  recetas** con su precio; se fabrica al pulsar. Cadena: tronco → 4 tablones; 2 tablones → 4 palos;
-  3 tablones/adoquines + 2 palos → pico, hacha o pala. Si no cabe el resultado, se devuelven los
-  ingredientes.
-- **Guardado** (`save.ts`): además de semilla y cambios, en local se guarda `arcade.blocks.player`
-  (vida + mochila) del mismo mundo; se retoma al volver.
-- **Iconos** (`atlas.ts`): dos atlas de 8 × 4 casillas de 16 px (32 cada uno). El de bloques se dibuja
-  píxel a píxel (hierba, piedra, madera, agua, mena de hierro y horno) y el de objetos con rectángulos
-  (picos, hachas, palas y espadas de madera, piedra y hierro, manzana, palo, lingote y carne cruda y
-  asada). Los bloques usan el icono isométrico de `icons.ts`. Se revisaron con capturas ampliadas; el
-  pico y el hacha de madera son los más parecidos, pero se distinguen por la silueta (doble púa
-  simétrica frente a hoja lateral) y las espadas por la hoja en diagonal con guarda.
-- **Probado** (simulación en Node y Chrome contra `npm run serve`): durezas ordenadas, tronco a mano
-  (1,52 s) → objeto al suelo → mochila; piedra sin pico no suelta nada y con pico suelta adoquín y gasta
-  el pico (60 → 58); fabricación completa hasta el pico de madera; caída (20 → 12), ahogo, muerte y
-  reaparición; guardado y carga de la mochila; clics de la interfaz (coger, soltar, fabricar); en red el
-  invitado entra en supervivencia y los mundos acaban iguales (24 bloques minados, mensajes ≤ 96
-  caracteres). Después, con hierro, hambre y animales: mena sin pico no suelta y con pico de hierro se
-  pica en 0,25 s (0,38 s con el de piedra); fundir gasta 1 mena y 1 combustible (el palo antes que el
-  tronco) y da lingote; pico de hierro con 3 lingotes + 2 palos; hambre 20 → 19,98 en 1 s andando, a 0
-  quita vida, por encima de 16 cura 0,35/s, comer llena y cura y con todo lleno no gasta; aparecen 7
-  animales, no se hunden ni se salen del mundo, la espada de hierro mata una vaca en 2 golpes (5 de daño
-  cada uno), suelta carne y gasta 2 usos; un horno a 2 bloques habilita la pestaña HORNO y el clic en la
-  receta funde; el atlas no tiene ninguna casilla sin dibujar. En Chrome: corazones y muslos en el HUD,
-  panel con pestañas (HORNO atenuado sin horno), vaca y cerdo de bloques visibles en el paisaje, sin
-  texturas rotas ni textos solapados.
+- Carpeta `src/game/casino/`: `config` (tamaños, tiempos, máquinas y tablas de premios), `floor` (simulación:
+  `Casino`), `input`, `render` (2D), `game` (`CasinoHost`/`CasinoGuest`). Id del hub `"casino"`. Sala 320×200 vista
+  desde arriba: pared con el prestamista, 8 tragaperras contra la pared, 2 mesas de "Doble o nada" y 1 de dados.
+- Reglas: **banco común** (empieza en `START_BANK` = 100). Día = cartel (`PH_INTRO`), `DAY_TIME` 90 s jugando
+  (`PH_DAY`), cierre (`PH_COLLECT`, las jugadas en marcha terminan), y si el banco llega a `quotaOf(día)`
+  (120 × 2,1^(día−1)) se paga (`PH_PAID`) y empieza otro día; si no, fin (`PH_OVER`, `finished`). R: otra partida.
+- Máquinas: se juega desde una franja delante (`machineAt`), ESPACIO apuesta y la ocupa `dur` + `SHOW_TIME`. El
+  anfitrión decide la tirada al empezar (`play`) y el premio entra al banco al terminar. Tragaperras $10 (EV ≈ 1,29,
+  poca varianza: cereza $5, pareja $10, 2 cerezas $20, trío ×4–×25), Doble o nada $50 (50 %, paga $110, EV 1,10),
+  Dados $100 (2d6: 12 ×12, 11 ×5, 9–10 ×2, 7 devuelve; EV 1,17). Las tres pagan algo más de lo que cuestan: la
+  dificultad es la varianza y la cuota que crece. Afinado con `test/casino.test.ts`: jugando con cabeza (apuesta
+  ≤ ¼ del banco), solo se pierde el día 1 un ~10 % (mediana 2 días); entre 4, mediana de 6 días.
+- Al tocar premios o cuotas, volver a pasar `npm test -- casino` (mira el EV y la mediana de días).
+- Red: mensaje `{t:"c", x, y, u, s}` (u = contador de pulsaciones); estado ~200 caracteres (`p` jugadores, `m`
+  máquinas `[usuario, t, premio, ...resultado]` o `[-1]`). El invitado adelanta `t` y el reloj entre estados.
+- Ideas para crecer (como el original): objetos y tienda (amuletos que cambian probabilidades), más pisos con
+  máquinas más caras, eventos del prestamista, ruleta y cartas, deuda que crece si no se paga entera.
 
 ## 6e. Estilo 3D: bloques simples (regla del usuario)
 
@@ -480,16 +533,29 @@ Los HUD y el menú tienen aire de recreativa retro. Piezas, todas compartidas:
   al leerlo). Para simulaciones largas dentro de la página, subir `--virtual-time-budget` (p. ej. 300000).
 - esbuild desde la carpeta temporal: las importaciones relativas largas fallan; usar rutas absolutas
   (`import ... from "C:/Users/.../ArcadeCode/src/game/..."`).
-- **Pointer lock no está garantizado**: en la webview de VS Code (y sin gesto de usuario) `requestPointerLock` puede
-  rechazarse sin lanzar nada visible. Nunca dar por hecho que hay ratón capturado: mirar `lookMode()` y ofrecer el
-  modo arrastre. En las pruebas sin ventana tampoco hay captura, así que se prueba justo ese camino.
-- **Una base de red sin mundo** se aplica donde no toca: al cambiar de juego, la base del anterior llegaba al mundo
-  nuevo y metía bloques de otro sitio. Toda base lleva la semilla (`sd`) y se descarta la que no encaje.
-- **Ctrl como tecla de juego en el navegador**: Ctrl+W cierra la pestaña (y Ctrl+S, Ctrl+D...). Para correr, Shift.
-- **`for...of` sobre `Set`/`Map`** necesita el target del `tsconfig` (ES2020): `tsc` suelto desde otra carpeta falla
-  con TS2802 aunque el proyecto compile. Ejecutar siempre `npm run typecheck`.
 
 ## 8. Cómo se ha probado (reutilizable)
+
+**Lo primero, las herramientas del repo** (petición del usuario, 2026-10-19: las pruebas tardaban mucho):
+
+- **`npm test`** (o `npm test -- drops red`, filtra por nombre): `test/run.mjs` empaqueta cada `test/*.test.ts` con
+  esbuild (inyecta el DOM falso de `test/stubs.js`, que también hace de `performance.now` controlable) y los corre
+  en paralelo; todo tarda ~3 s. Utilidades en `test/lib.ts`: `check(ok, texto, detalle)`, `rng(semilla)`,
+  `tickClock(ms)` y `blocksInput()` (entrada falsa de Bloques con contadores `_dig`, `_place`, `_inv`, `_throw`,
+  `_clicks`...). Banco de red de Bloques reutilizable en `test/blocks-net.ts`. `games.test.ts` cubre Sumo,
+  Monigotes, bots, cambio de juego en red y la malla. **Al añadir algo, añadir su prueba aquí** en vez de scripts sueltos.
+- **`npm run shot -- test/browser/<escenario>.mjs [carpeta]`** (salida por defecto `.cache/shots/`): `scripts/shot.mjs`
+  levanta `serve.mjs` en el 8123, abre Edge sin ventana con **la GPU real** (`--use-angle=d3d11`; si no hay, cae
+  a SwiftShader) en `/?test&seed=777` y ejecuta el escenario, que recibe `{ js, start, step, draw, hold, press,
+  mouse, shot, sleep }`. Un escenario de 5 capturas tarda ~3,5 s.
+- **Modo `?test` de `main.ts`**: el bucle no corre solo; `window.__arcade` tiene `start(id)`, `step(n, dt)`
+  (pasos fijos, instantáneo), `draw(n)` (Bloques construye unos chunks por dibujo: `draw(20)` al empezar),
+  `key(code, down)` y `game` (el objeto del juego, p. ej. `BlocksHost`, para preparar estado: `game.pilot.pitch`).
+  `?seed=N` fija también el mundo de Bloques en local.
+- Lo visual que solo es "cómo se ve" lo puede mirar el usuario con F5: pedírselo antes que hacer capturas largas.
+- El `.vsix` solo cuando el usuario lo pida; mientras se trabaja basta `npm run typecheck` + `npm test`.
+
+Recetas antiguas (antes de lo anterior; siguen valiendo para cosas que no cubren):
 
 - Lógica en Node: empaquetar con esbuild (`--platform=node`) y simular (carreras solo IA, 400
   circuitos, mapas de Bomberman, física de derrape).
@@ -501,7 +567,7 @@ Los HUD y el menú tienen aire de recreativa retro. Piezas, todas compartidas:
   --screenshot=...` (sin los flags de SwiftShader no hay WebGL sin ventana).
 - Antes de entregar: `npm run typecheck`, `npm run build`, `npm run build:web` y reempaquetar el `.vsix`.
 
-### Recetas de las pruebas de los juegos 3D (los scripts no se guardan en el repo: rehacerlos así)
+### Recetas de las pruebas de los juegos 3D (de antes de `test/`: al rehacer una, pasarla a `test/`)
 
 Todos van en la carpeta temporal, se empaquetan con `npx esbuild x.ts --bundle` (`--platform=node --format=esm`
 para Node, `--format=iife` para la página) e importan el código del juego con rutas absolutas. La página es un
@@ -541,31 +607,32 @@ HTML con `<div id="grid">` y el `.js`; cada escena se dibuja en un lienzo de `ta
 - **Derrape**: integrar solo `a` y `ma` con las fórmulas de `stepKart` a `MAX_SPEED` durante 1,5 s, para volante
   cerrando, neutro y abriendo; anotar el cruce máximo y el radio (`v / giro`).
 
-## 9. Estado y pendientes (actualizado el 2026-10-19)
+## 9. Estado y pendientes (actualizado el 2026-10-17)
 
-Sesión del 2026-10-19 (Bloques, sin commit y sin desplegar todavía):
+Hecho en las últimas sesiones (todavía **sin commit** y **sin desplegar** en Vercel; el `.vsix` 0.1.3 ya se reempaquetó con todo esto el 2026-10-17):
 
-- **Modo supervivencia** completo (sección 6h): vida, daño, dureza, herramientas con desgaste, objetos que
-  caen, mochila con fabricación, guardado de la mochila y panel propio. Se elige al empezar (creativo o
-  supervivencia) y en red lo decide el anfitrión (`md` en el estado).
-- **Red**: los estados ya no llevan siempre los últimos 48 cambios sino solo los que algún invitado no ha aplicado
-  (`q`/`ackN`); la base lleva la semilla (`sd`) y se descarta si es de otro mundo (fallo real: al cambiar de juego se
-  aplicaba la base del anterior). Tope de cambios propios sin confirmar (`MAX_PENDING`).
-- **Malla** del chunk con búfer de margen: 1,17× más rápida, resultado idéntico.
-- **Controles**: correr con Shift, botón central para copiar el bloque, y el ratón funciona **también sin capturar el
-  puntero** (arrastrar para mirar, clic corto para romper), que es lo que podía pasar en la webview de VS Code.
-- **Guardado local** del mundo y **N dos veces** para empezar otro.
-- **HUD**: tres líneas de ayuda (recortadas con `fitText` para que no se salgan), "MIRAS: <bloque>", nombre del bloque
-  en la mano y aviso de mundo nuevo.
+- MEMORIA.md y README revisados y al día (el README estaba desfasado).
+- Juego nuevo **Ruleta de cartuchos** (secciones 6d y 6e): reglas, 9 objetos, crupier, red, 3D de bloques.
+- El 3D pasó por tres versiones a petición del usuario: motor propio por software (le pareció "primitivo"),
+  Three.js con esferas y curvas (no le convencieron las esferas), vóxeles finos (tampoco) y por fin **cajas
+  simples**, que es lo que quiere (regla 6e).
+- **Sumo de bolas** pasado de modo 7 a 3D (bolas facetadas, baldosas que caen sin temblar, lava de cubos).
+- **Karts** pasado de modo 7 a 3D con **relieve**, y derrape corregido (sección 6).
+- `three` añadido en `devDependencies`; `core/three.ts` compartido por los tres juegos 3D.
 
 Pendiente o por decidir:
 
 - Probarlo jugando de verdad (teclado, barra lateral de VS Code, red con dos equipos): hasta ahora se ha
-  comprobado con simulaciones y capturas sin ventana, no en una gráfica real.
-- Bloques: probar el ratón dentro de la webview (el modo arrastre está pensado para eso, pero no se ha visto en VS
-  Code) y el rendimiento con gráfica real.
-- Bloques, siguientes pasos posibles (a decidir con el usuario): **cultivos** (trigo y pan) y **mobs
-  hostiles** (zombis de noche, con ciclo de día y noche), agua/lava que fluyan, cofres, y que el
-  anfitrión arbitre objetos y vida para que se compartan en red.
-- Bloques en red: los objetos del suelo, los animales y la vida son de cada jugador (no se comparten).
-  Si se quiere, que el anfitrión arbitre los objetos y mande la vida en el estado.
+  comprobado con simulaciones y capturas en Edge sin ventana (SwiftShader), no en una gráfica real.
+- Rendimiento en equipos flojos: la lava de Sumo mueve ~2.500 cubos por frame y hay sombras en los tres juegos.
+  Si va lento: menos celdas de lava (`LAVA_CELL` más grande), sombras de 512 o `MAX_RES` 2 en `core/three.ts`.
+- Karts: las cuestas son solo visuales; si se quiere que frenen o aceleren hay que tocar `stepKart` (lo usan
+  anfitrión e invitado) y probar bien en red.
+- Ruleta: al apuntarte a ti mismo, tu mano queda grande delante de la cámara.
+- Ajustar el derrape a gusto del usuario cuando lo pruebe (constantes `DRIFT_*` en `karts/config.ts`).
+- Monigotes y Bomberman siguen en 2D; si se pasan a 3D, seguir la regla de bloques (6e) y usar `core/three.ts`.
+- Bloques: probar el rendimiento con gráfica real. La supervivencia básica ya está (romper, recoger, inventario,
+  crafteo, objetos en el suelo, animales que se pueden matar, vida, hambre y daño, cuevas, menas, horno y
+  antorchas con luz, monstruos, día y noche); siguiente, lo que el usuario
+  pida: durabilidad, armadura, cama (saltar la noche), arco para el jugador (flechas e hilo ya existen), oro y más
+  menas, lava, cofres y hornos compartidos (necesitarían viajar por la red), guardar el mundo.
