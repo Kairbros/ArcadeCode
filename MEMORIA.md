@@ -1,4 +1,4 @@
-# Memoria del proyecto: Arcade (Bomberman, Karts, Sumo de bolas, Monigotes, Ruleta de cartuchos, Bloques y Casino de deudas)
+# Memoria del proyecto: Arcade (Bomberman, Karts, Sumo de bolas, Monigotes, Ruleta de cartuchos, Bloques, Casino de deudas y Billar)
 
 Guía para quien vaya a extender el proyecto (persona o agente). Resume decisiones, contratos, despliegue
 y trampas conocidas. El README cubre el uso; este documento, el porqué y el cómo extender.
@@ -86,6 +86,7 @@ src/game/core/three.ts     3D compartido: un solo WebGLRenderer (`glRenderer`), 
 src/game/stick/            config, stages, fight (física+armas+bots+árbitro), input, render (poses por código), game
 src/game/ruleta/           config, match (reglas+árbitro), bot, state (estado de red), input (teclas+selector),
                            math3d (vectores/giros), textures (generadas), models (Three.js), render (escena+HUD), game
+src/game/pool/             config, table (física + trace), match (reglas), bot, input (ratón+teclado), render (3D ortogonal + HUD), game
 src/game/blocks/           config, blocks (tipos), world (generación con cuevas y menas+luz+rayo+diff), mesher (chunks), player (física),
                            pilot (jugador propio), atlas (texturas), input (teclado+ratón), render (Three.js+HUD), game;
                            supervivencia: items, inventory, crafting (recetas), craftui (pantalla con ratón), icons,
@@ -427,6 +428,36 @@ Petición del usuario (2026-10-19): algo como *Gamble With Your Friends* (casino
   máquinas `[usuario, t, premio, ...resultado]` o `[-1]`). El invitado adelanta `t` y el reloj entre estados.
 - Ideas para crecer (como el original): objetos y tienda (amuletos que cambian probabilidades), más pisos con
   máquinas más caras, eventos del prestamista, ruleta y cartas, deuda que crece si no se paga entera.
+
+## 6i. Billar (claves)
+
+- **Qué es**: bola 8 estilo móvil (8 Ball Pool, con nombre propio «Billar»). Pantalla 320×200, mesa 240×120 vista
+  desde arriba con cámara **ortogonal** (`config.ts`: pantalla = centro + mundo × `ZOOM`), así el ratón se convierte a
+  mundo con `toWorld` sin proyecciones. Las bolas son esferas con textura generada (excepción razonada a la regla
+  de bloques: una bola de billar no se puede hacer con cajas).
+- **Archivos**: `table.ts` física a pasos fijos de 1/240 s con velocidad lineal y angular por bola (`wx`, `wy` giro
+  adelante/atrás, `wz` lateral): el taco da `v` y `ω = r × J / I` según dónde pega (hasta medio radio, `SPIN_GAIN` lo
+  exagera un poco); el paño resbala (`SLIDE_ACC`) hasta que la bola rueda y solo la frena `ROLL_DECEL`/`ROLL_DRAG`, y de
+  ahí salen solos seguir, retroceder y "stun"; el choque entre bolas lleva rozamiento (`BALL_FRIC`: arrastre y paso de
+  efecto lateral); las bandas devuelven menos energía cuanto más fuerte llega la bola y su roce (`RAIL_FRIC`) convierte
+  efecto lateral en desvío; los labios de las troneras son círculos de `JAW_R`; `Table.clone()` sirve a la IA para
+  ensayar. `trace` es la línea de tiro (bola fantasma, también la usa el render); `match.ts` reglas y
+  árbitro (`resolve`); `bot.ts` IA (bola fantasma + línea libre + ángulo de corte; los 5 mejores candidatos se **ensayan en una copia de
+  la mesa** con varias potencias y solo vale uno que entre; error ±0,35°); `input.ts` ratón/teclado (el taco sigue al cursor suavizado; Shift o clic derecho = puntería fina relativa, ×0,15); `render.ts` escena + taco + HUD; `game.ts` adaptadores.
+- **Asientos**: 2 o 4 (`kinds`). Equipo = `asiento % 2` (`groups`, `wins` y `left` van por equipo); en dobles
+  `nextOf` alterna el compañero que tira (`Match.shooterOf`). 0 anfitrión, 1.. invitados (`remote`), el resto `ai`
+  (o `local` sin bots = por turnos en el mismo equipo). Con ≤1 invitado, **P** alterna 1v1 / 2v2 antes del saque;
+  con 2 o más invitados es siempre 2v2. En 1v1 los invitados 2 y 3 solo miran. `PoolHost.key("KeyR")` solo actúa con la partida terminada.
+- **Reglas**: mesa abierta hasta la primera bola metida sin falta (no cuenta en el saque); falta = blanca embolsada,
+  no tocar nada, tocar primero bola ajena (o la 8 antes de tiempo), o ninguna bola a banda tras el contacto
+  (saque: 4 bolas a banda o una embolsada) → bola en mano para el rival. La 8 se marca (`aim.call`, auto con
+  `bestPocket` si no se elige) y pierde quien la mete antes de tiempo, con falta o en otra tronera. La 8 en el saque
+  rehace el triángulo. Pasados 40 s el turno es falta.
+- **Red**: el invitado con turno manda `PoolMsg` (ángulo, potencia, efecto, tronera, contadores `f` tiro y `k`
+  colocación **por turno** y `u` = número de turno `Match.turnNo`). El anfitrión ignora mensajes de otro turno
+  (así un clic perdido no dispara en el turno siguiente). Los invitados suavizan y extrapolan posiciones; la
+  blanca en mano la mueve el cursor local y se confirma con `k`.
+- **Pruebas**: `npm test -- pool` (física, 25 partidas CPU contra CPU, falta) y `npm run shot -- test/browser/pool.mjs`.
 
 ## 6e. Estilo 3D: bloques simples (regla del usuario)
 

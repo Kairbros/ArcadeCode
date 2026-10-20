@@ -14,6 +14,8 @@ import { RuletaHost } from "./ruleta/game";
 import { RuletaInput } from "./ruleta/input";
 import { BlocksHost } from "./blocks/game";
 import { BlocksInput, releasePointer } from "./blocks/input";
+import { PoolHost } from "./pool/game";
+import { PoolInput } from "./pool/input";
 import { CasinoHost } from "./casino/game";
 import { CasinoInput } from "./casino/input";
 import { Keyboard, isTyping } from "./core/keyboard";
@@ -196,6 +198,15 @@ function startGame(id: GameId) {
   if (id === "casino") {
     // El salón lo lleva este equipo: se anda hasta las mesas y se apuesta en ellas.
     const game = new CasinoHost(new CasinoInput(keyboard), 0, "local");
+    play({
+      size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
+      get finished() { return game.finished; }, switchGame: startLocal,
+    }, game);
+    return;
+  }
+  if (id === "pool") {
+    // Tú contra la CPU; sin bots, dos jugadores por turnos en este equipo.
+    const game = new PoolHost(new PoolInput(keyboard), 0, "local", settings.bots);
     play({
       size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,

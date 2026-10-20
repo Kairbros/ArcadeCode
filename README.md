@@ -1,4 +1,4 @@
-# Arcade: Bomberman, Karts, Sumo de bolas, Monigotes, Ruleta de cartuchos, Bloques y Casino de deudas
+# Arcade: Bomberman, Karts, Sumo de bolas, Monigotes, Ruleta de cartuchos, Bloques, Casino de deudas y Billar
 
 Hub de juegos multijugador en TypeScript + Canvas. Se juega en el navegador o dentro de VS Code
 (vista "Arcade" del Explorador). Quien crea la sala elige el juego y, al acabar la ronda, puede
@@ -46,6 +46,13 @@ cambiar a otro sin cerrar la sala (tecla **J**).
 - **Casino de deudas**: cooperativo de 1 a 4. Todos comparten el banco y cada día (90 s) hay que juntar la cuota
   del prestamista, que crece día a día. Tragaperras ($10), Doble o nada ($50) y Dados ($100): más caro, más se
   gana y más se arriesga. Si al cerrar no llega el dinero, se acaba la partida.
+- **Billar (bola 8)**: lisas contra rayadas en una mesa vista desde arriba (3D). Saque con triángulo,
+  grupos que se fijan al meter la primera bola, **efecto** (rosca arriba/abajo y lateral), línea de
+  tiro con bola fantasma, **bola en mano** tras una falta (blanca embolsada, sin tocar bola, bola
+  equivocada o ninguna a banda), reloj de 40 s por turno y 8 en la tronera marcada para ganar.
+  1 contra 1 (CPU, por turnos en el mismo equipo sin bots, o en red) o **2 contra 2** hasta con 4 personas: los
+  asientos pares contra los impares y los compañeros se turnan para tirar. Con 3 o 4 personas es siempre 2 contra 2;
+  con menos, **P** alterna 1 contra 1 / 2 contra 2 antes del saque (los huecos los ocupa la CPU).
 
 En Karts, Sumo y Monigotes los huecos libres hasta 4 los ocupan **bots** (se pueden desactivar desde
 el menú; sin bots, en solitario es contrarreloj o aguantar). En Ruleta de cartuchos los bots sientan
@@ -68,6 +75,7 @@ En todos los juegos valen **WASD o flechas** y **Espacio o Enter** como botón d
 | Ruleta de cartuchos | ← → elegir escopeta/objeto y objetivo | Usar/disparar: Espacio / Enter / E | ↓ / Retroceso volver · R nueva partida |
 | Bloques (creativo) | WASD andar · Espacio saltar/subir · Shift bajar (volando) · ratón (clic para capturarlo) o flechas mirar | Romper: clic / Q · Poner: clic derecho / Enter | 1–9 o rueda: bloque · F volar |
 | Casino de deudas | WASD / flechas | Jugar en la máquina de delante: Espacio / Enter / E | R nueva partida |
+| Billar | Ratón: el taco apunta al cursor, con **puntería fina** manteniendo Shift o el clic derecho · A/D o ← → girar (un toque mueve poco, sostener acelera; Shift: fino) | Potencia: arrastra la barra de la izquierda hacia abajo y suelta, o W/S y Espacio tira · Efecto: clic en la bola de abajo (clic derecho / X: centro) | Rueda: potencia · clic en una tronera o Q/E: marcar la de la 8 · R otra partida |
 | Bloques (supervivencia) | Igual, sin volar | Golpear a un animal: clic · Romper: mantener clic · Poner o usar la mesa o el horno: clic derecho / Enter · Comer: mantener clic derecho con comida · Reaparecer: Espacio / clic | E / Tab / I inventario (clic coger/dejar, clic derecho la mitad o uno, Mayús+clic mover, clic fuera tirar) · Q tirar uno (Ctrl+Q el montón) · Esc cerrar |
 
 Comunes: **G** escala de grises · **J** cambiar de juego (con la ronda terminada) · **Esc** volver al
@@ -139,7 +147,7 @@ si tu Redis está en otra región, cambia `regions`.
   |---|---|
   | `arcade.serverUrl` | URL de emparejamiento: tu despliegue de Vercel o `http://IP-DEL-EQUIPO:8000`. Por defecto, el despliegue público del proyecto. |
   | `arcade.grayscale` | Escala de grises (también con G o desde el menú). |
-  | `arcade.bots` | Rellenar con bots en Karts, Sumo y Monigotes; crupier en Ruleta de cartuchos. |
+  | `arcade.bots` | Rellenar con bots en Karts, Sumo y Monigotes; crupier en Ruleta de cartuchos; rival en Billar (sin bots, dos jugadores por turnos). |
   | `arcade.crt` | Efecto de pantalla de recreativa: líneas de barrido y bordes oscuros (también desde el menú). |
   | `arcade.playerName` | Tu nombre en las partidas (vacío: «Jugador N»). |
 
@@ -160,6 +168,7 @@ src/game/ruleta/     Ruleta de cartuchos: match (reglas + árbitro), bot, models
 src/game/blocks/     Bloques: world (generación + rayo), mesher (chunks), player (física), pilot, atlas, render (3D), input, game;
                      supervivencia: items, inventory, crafting (recetas), craftui (pantalla con ratón), icons, drops,
                      mobs (animales y monstruos), vitals (vida, hambre y aire), furnace (horno), daycycle (día y noche)
+src/game/pool/       Billar: table (física + línea de tiro), match (reglas + árbitro), bot, render (3D + HUD), input, game
 src/game/casino/     Casino de deudas: config (máquinas y premios), floor (sala + banco + días), render, input, game
 src/server/signal.ts emparejamiento y relé (compartido por Vercel y el servidor local)
 api/signal.ts        función serverless de Vercel

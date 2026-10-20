@@ -1,7 +1,7 @@
 {
   "name": "kairbros-arcade",
   "displayName": "Kairbros Arcade",
-  "description": "Hub de juegos multijugador dentro de VS Code: laberinto de bombas, karts, sumo de bolas, monigotes, ruleta de cartuchos, bloques (creativo y supervivencia) y casino de deudas",
+  "description": "Hub de juegos multijugador dentro de VS Code: laberinto de bombas, karts, sumo de bolas, monigotes, ruleta de cartuchos, bloques (creativo y supervivencia), casino de deudas y billar",
   "version": "0.1.3",
   "publisher": "kairbros-dev",
   "icon": "src/media/icon.png",
