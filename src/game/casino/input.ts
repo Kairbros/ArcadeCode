@@ -5,8 +5,11 @@ import type { Keyboard } from "../core/keyboard";
 const HELD = {
   forward: ["KeyW", "ArrowUp"],
   back: ["KeyS", "ArrowDown"],
-  left: ["KeyA", "ArrowLeft"],
-  right: ["KeyD", "ArrowRight"],
+  // A/D andan de lado; girar es cosa del ratón (o de ← →).
+  strafeLeft: ["KeyA"],
+  strafeRight: ["KeyD"],
+  turnLeft: ["ArrowLeft"],
+  turnRight: ["ArrowRight"],
 };
 const PRESS = {
   ok: ["Space", "Enter", "NumpadEnter"],
@@ -130,6 +133,8 @@ export class CasinoInput {
   back = 0;
   left = 0;
   right = 0;
+  turnLeft = 0;
+  turnRight = 0;
   run = false;
 
   constructor(private keyboard: Keyboard) {
@@ -145,8 +150,10 @@ export class CasinoInput {
     }
     this.forward = this.keyboard.anyDown(HELD.forward) ? 1 : 0;
     this.back = this.keyboard.anyDown(HELD.back) ? 1 : 0;
-    this.left = this.keyboard.anyDown(HELD.left) ? 1 : 0;
-    this.right = this.keyboard.anyDown(HELD.right) ? 1 : 0;
+    this.left = this.keyboard.anyDown(HELD.strafeLeft) ? 1 : 0;
+    this.right = this.keyboard.anyDown(HELD.strafeRight) ? 1 : 0;
+    this.turnLeft = this.keyboard.anyDown(HELD.turnLeft) ? 1 : 0;
+    this.turnRight = this.keyboard.anyDown(HELD.turnRight) ? 1 : 0;
     this.run = this.keyboard.isDown("ShiftLeft") || this.keyboard.isDown("ShiftRight");
   }
 
@@ -183,8 +190,13 @@ export class CasinoInput {
     return this.forward - this.back;
   }
 
-  /** Giro con las teclas mantenidas (mientras andas). */
+  /** Giro con las flechas mantenidas. */
   get turn(): number {
+    return this.turnRight - this.turnLeft;
+  }
+
+  /** Andar de lado con A/D, sin girar (el giro es del ratón). */
+  get strafe(): number {
     return this.right - this.left;
   }
 

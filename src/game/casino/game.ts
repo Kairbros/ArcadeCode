@@ -178,7 +178,7 @@ export class CasinoHost implements HostGame {
   private jailInput(dt: number) {
     this.look(dt);
     if (this.input.take("ok")) this.useTrash(0);
-    stepPlayer(this.bodies[0], { forward: this.input.move, turn: this.input.turn, run: false }, dt, COLLIDERS);
+    stepPlayer(this.bodies[0], { forward: this.input.move, turn: this.input.turn, strafe: this.input.strafe, run: false }, dt, COLLIDERS);
     const b = this.bodies[0];
     [b.x, b.z] = clampToJail(b.x, b.z);
   }
@@ -326,7 +326,7 @@ export class CasinoHost implements HostGame {
     stepPlayer(
       body,
       // Aturdido o agarrado no se anda, pero el empujón sí te mueve.
-      stunned ? { forward: 0, turn: 0, run: false } : { forward: this.input.move, turn: this.input.turn, run: this.input.run },
+      stunned ? { forward: 0, turn: 0, strafe: 0, run: false } : { forward: this.input.move, turn: this.input.turn, strafe: this.input.strafe, run: this.input.run },
       dt,
       COLLIDERS,
       this.others(0),
@@ -1023,7 +1023,7 @@ export class CasinoGuest implements GuestGame {
       this.input.take("sit");
       this.look();
       if (!this.rob && this.input.take("ok")) this.useTrash();
-      stepPlayer(this.body, { forward: this.input.move, turn: this.input.turn, run: false }, dt, COLLIDERS);
+      stepPlayer(this.body, { forward: this.input.move, turn: this.input.turn, strafe: this.input.strafe, run: false }, dt, COLLIDERS);
       [this.body.x, this.body.z] = clampToJail(this.body.x, this.body.z);
       this.tickRob(dt);
       return;
@@ -1086,7 +1086,7 @@ export class CasinoGuest implements GuestGame {
       stepPlayer(
         this.body,
         // Aturdido o agarrado no se anda (el empujón del golpe sí te mueve).
-        this.stun > 0 ? { forward: 0, turn: 0, run: false } : { forward: this.input.move, turn: this.input.turn, run: this.input.run },
+        this.stun > 0 ? { forward: 0, turn: 0, strafe: 0, run: false } : { forward: this.input.move, turn: this.input.turn, strafe: this.input.strafe, run: this.input.run },
         dt,
         COLLIDERS,
         this.others(),

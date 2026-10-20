@@ -19,8 +19,10 @@ export interface Body3 {
 export interface Move3 {
   /** -1 atrás, 0 quieto, 1 adelante. */
   forward: number;
-  /** -1 izquierda, 0, 1 derecha. */
+  /** -1 izquierda, 0, 1 derecha: gira el cuerpo (solo flechas; el ratón mueve la vista). */
   turn: number;
+  /** -1 izquierda, 0, 1 derecha: andar de lado (A/D) sin girar. */
+  strafe?: number;
   run: boolean;
 }
 
@@ -39,11 +41,20 @@ export function stepPlayer(b: Body3, m: Move3, dt: number, colliders: Collider[]
   // Ojo con el signo: el muñeco mira al -Z, así que girar a la derecha (turn +1) es RESTAR al giro.
   b.yaw -= m.turn * TURN * dt;
   const speed = m.run ? RUN : WALK;
-  const step = m.forward * speed * dt;
+  let fwd = m.forward;
+  let side = m.strafe ?? 0;
+  // En diagonal no se corre más: se reparte la velocidad.
+  if (fwd && side) {
+    fwd *= Math.SQRT1_2;
+    side *= Math.SQRT1_2;
+  }
+  const step = fwd * speed * dt;
+  const stepSide = side * speed * dt;
   const shoved = shove(b, dt, colliders);
-  if (!step) return shoved;
-  const dx = -Math.sin(b.yaw) * step;
-  const dz = -Math.cos(b.yaw) * step;
+  if (!step && !stepSide) return shoved;
+  // Adelante = hacia donde mira (-Z del muñeco); derecha = perpendicular a la mirada.
+  const dx = -Math.sin(b.yaw) * step + Math.cos(b.yaw) * stepSide;
+  const dz = -Math.cos(b.yaw) * step - Math.sin(b.yaw) * stepSide;
   const [x0, z0] = [b.x, b.z];
   // Eje a eje: así se desliza por las paredes (y por los demás) en vez de quedarse clavado.
   const nx = b.x + dx;

@@ -1191,11 +1191,14 @@ export class CasinoStage {
     // Lo que llevas en la mano (primera persona).
     const inJail = (s.ja?.[v.me] ?? 0) > 0;
     const prog = v.swing > 0 ? clamp01(1 - v.swing / 0.38) : 0;
-    const arc = Math.sin(prog * Math.PI);
     if (this.view.bat) {
       this.view.bat.visible = !inJail && v.slot === SLOT_BAT;
-      this.view.bat.rotation.z = 0.5 - arc * 1.7;
-      this.view.bat.position.set(0.4 - arc * 0.18, -0.18 + arc * 0.1, -0.75 - arc * 0.18);
+      // Golpe de arriba abajo: primero se eleva sobre la cabeza y luego cae de frente.
+      // Se mantiene casi vertical (poco giro en X) para que no se pierda de vista al bajar.
+      const lift = prog < 0.2 ? prog / 0.2 : 1;
+      const down = prog < 0.2 ? 0 : (prog - 0.2) / 0.8;
+      this.view.bat.position.set(0.4 - down * 0.06, -0.18 + lift * 0.50 - down * 0.62, -0.75 + down * 0.12);
+      this.view.bat.rotation.set(-0.18 - lift * 0.25 + down * 0.42, -0.45 + down * 0.2, 0.5 - down * 0.12);
     }
     if (this.view.hand) this.view.hand.visible = !inJail && v.slot === SLOT_HAND;
     if (this.view.trash) this.view.trash.visible = inJail && v.trashTaken >= 0;

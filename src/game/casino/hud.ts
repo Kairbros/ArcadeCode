@@ -159,7 +159,7 @@ function drawNotice(ctx: Ctx, v: HudView) {
 function drawWalkUi(ctx: Ctx, v: HudView) {
   const hint = v.near >= 0
     ? `E · SENTARSE EN ${GAME_TITLE[TABLES[v.near].kind]}`
-    : "WASD ANDAR · RATÓN MIRAR · 1/2/3 MANOS · ESPACIO USAR";
+    : "WASD ANDAR (A/D DE LADO) · RATÓN MIRAR · 1/2/3 MANOS · ESPACIO USAR";
   const w = Math.min(CW - 20, textWidth(ctx, hint, SMALL) + 18);
   roundRect(ctx, CW / 2 - w / 2, 150, w, 14, 4, v.near >= 0 ? C_ACCENT : C_PANEL, v.near >= 0 ? C_ACCENT : C_LINE, 1);
   text(ctx, fitText(ctx, hint, w - 10, SMALL), CW / 2, 154, v.near >= 0 ? C_BG : C_TEXT, SMALL, "center");
