@@ -14,6 +14,8 @@ import { RuletaHost } from "./ruleta/game";
 import { RuletaInput } from "./ruleta/input";
 import { BlocksHost } from "./blocks/game";
 import { BlocksInput, releasePointer } from "./blocks/input";
+import { CasinoHost } from "./casino/game";
+import { CasinoInput } from "./casino/input";
 import { Keyboard, isTyping } from "./core/keyboard";
 import { GuestSession } from "./net/guest";
 import { HostSession } from "./net/host";
@@ -31,7 +33,7 @@ const ctx = canvas.getContext("2d")!;
 // Teclas cuyo comportamiento por defecto (scroll, etc.) se anula mientras se juega.
 const captured = new Set([
   ...PLAYER_CONTROLS.flatMap((s) => [...s.up, ...s.down, ...s.left, ...s.right, ...s.bomb]),
-  "ShiftRight", "KeyC", "KeyE", "Backspace", "KeyQ", "KeyF",
+  "ShiftRight", "KeyC", "KeyE", "Backspace", "KeyQ", "KeyF", "Tab",
 ]);
 const keyboard = new Keyboard(window, captured);
 const menu = new Menu();
@@ -61,10 +63,14 @@ interface Screen {
   /** Partida terminada: con J se puede cambiar de juego (solo local y anfitrión). */
   readonly finished?: boolean;
   switchGame?(id: GameId): void;
+  /** Esc dentro del juego (cerrar un inventario); true = no salir al menú. */
+  escape?(): boolean;
 }
 const MENU_SIZE = DEFAULT_SIZE;
 const BOMBER_SIZE = [SCREEN_W, SCREEN_H] as const;
 let screen: Screen | null = null;
+/** Objeto del juego en curso (local) o la sesión en red: solo lo usan las pruebas (?test). */
+let current: unknown = null;
 let host: HostSession | null = null;
 let guest: GuestSession | null = null;
 /** El selector de "Cambiar de juego" está abierto sobre la partida. */
@@ -74,7 +80,7 @@ function showMain(error = "") {
   host?.close();
   guest?.close();
   host = guest = null;
-  screen = null;
+  screen = current = null;
   switching = false;
   releasePointer(); // el menú se maneja con el ratón
   resetNames();
@@ -115,8 +121,9 @@ onSettingsChange(() => {
   btn.setAttribute("aria-pressed", String(settings.grayscale));
 });
 
-function play(s: Screen) {
+function play(s: Screen, game: unknown) {
   screen = s;
+  current = game;
   resume();
 }
 
@@ -138,13 +145,15 @@ function showSwitch(s: Screen) {
 
 function startLocal(id: GameId) {
   setName(0, myName(0));
+  const params = new URLSearchParams(location.search);
+  const seed = Number(params.get("seed")) || undefined;
   if (id === "karts") {
     // Un jugador contra la IA; vale WASD o flechas.
     const game = new KartsHost(new KartsInput(keyboard), 0, "local", settings.bots);
     play({
       size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,
-    });
+    }, game);
     return;
   }
   if (id === "stick") {
@@ -153,7 +162,7 @@ function startLocal(id: GameId) {
     play({
       size: game.size, update: (dt) => game.update(dt), draw: (c) => game.draw(c), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,
-    });
+    }, game);
     return;
   }
   if (id === "ruleta") {
@@ -162,16 +171,25 @@ function startLocal(id: GameId) {
     play({
       size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,
-    });
+    }, game);
     return;
   }
-  if (id === "blocks") {
-    // Mundo propio para construir (en red se comparte el del anfitrión).
-    const game = new BlocksHost(new BlocksInput(keyboard), 0, "local");
+  if (id === "blocks" || id === "survival") {
+    // Mundo propio, creativo o de supervivencia (en red se comparte el del anfitrión). ?seed=N fija el mundo.
+    const game = new BlocksHost(new BlocksInput(keyboard), 0, "local", id, seed);
     play({
       size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: () => game.key(),
+      get finished() { return game.finished; }, switchGame: startLocal, escape: () => game.escape(),
+    }, game);
+    return;
+  }
+  if (id === "casino") {
+    // Solo contra la cuota (en red, el banco es de todos).
+    const game = new CasinoHost(new CasinoInput(keyboard), 0, "local", seed);
+    play({
+      size: game.size, update: (dt) => game.update(dt), draw: (c) => game.draw(c), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,
-    });
+    }, game);
     return;
   }
   if (id === "balls") {
@@ -180,18 +198,16 @@ function startLocal(id: GameId) {
     play({
       size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,
-    });
+    }, game);
     return;
   }
-  const params = new URLSearchParams(location.search);
   const players = params.get("players") === "1" ? 1 : 2;
-  const seed = Number(params.get("seed")) || undefined;
   const sources = PLAYER_CONTROLS.map((scheme) => new LocalController(keyboard, scheme));
   const game = new Game(sources, players, seed, "local");
   play({
     size: BOMBER_SIZE, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.handleKey(code),
     get finished() { return game.over; }, switchGame: startLocal,
-  });
+  }, game);
 }
 
 async function startHost(id: GameId) {
@@ -217,7 +233,8 @@ async function startHost(id: GameId) {
       key: (code) => session.game!.key(code),
       get finished() { return session.game!.finished; },
       switchGame: (next) => session.switchGame(next),
-    });
+      escape: () => !!session.game?.escape?.(),
+    }, session);
   };
   session.onChange = refresh;
   session.onError = (msg) => host === session && !session.game && showMain(msg);
@@ -233,7 +250,7 @@ async function startJoin(code: string) {
   if (!signal) return;
   const session = new GuestSession(signal, keyboard);
   guest = session;
-  screen = session;
+  screen = current = session;
   menu.showMessage("Conectando...", `Uniéndose a la sala ${code}. Probando conexión directa...`, {
     label: "Cancelar",
     onClick: () => showMain(),
@@ -271,6 +288,7 @@ async function startJoin(code: string) {
 window.addEventListener("keydown", (ev) => {
   if (ev.repeat || isTyping(ev)) return;
   if (ev.code === "Escape" && switching) resume();
+  else if (ev.code === "Escape" && screen?.escape?.()) return;
   else if (ev.code === "Escape" && screen) showMain();
   else if (ev.code === "KeyG") toggleGray();
   else if (ev.code === "KeyJ" && !menu.visible && screen?.switchGame && screen.finished) showSwitch(screen);
@@ -295,23 +313,54 @@ function fit(size: readonly [number, number]) {
 window.addEventListener("resize", () => fit(fitted));
 canvas.addEventListener("pointerdown", () => canvas.focus());
 
-let last = performance.now();
-function frame(now: number) {
-  const dt = Math.min((now - last) / 1000, 1 / 20);
-  last = now;
+function render() {
   // Cada juego tiene su tamaño: se reajusta el lienzo al cambiar de juego.
   const size = screen?.size ?? MENU_SIZE;
   if (size[0] !== fitted[0] || size[1] !== fitted[1]) fit(size);
   if (screen) {
-    screen.update(dt);
     screen.draw(ctx, pixelScale);
     if (settings.crt) drawCrt(ctx, pixelScale);
   } else {
     ctx.fillStyle = css(BG_COLOR);
     ctx.fillRect(0, 0, size[0], size[1]);
   }
+}
+
+let last = performance.now();
+function frame(now: number) {
+  const dt = Math.min((now - last) / 1000, 1 / 20);
+  last = now;
+  screen?.update(dt);
+  render();
   requestAnimationFrame(frame);
 }
 
-showMain();
-requestAnimationFrame(frame);
+// --- Modo prueba (?test): el reloj no corre solo; las pruebas del navegador (scripts/shot.mjs)
+// avanzan la simulación con dt fijo y dibujan cuando quieren, sin depender de los fps. ---
+if (new URLSearchParams(location.search).has("test")) {
+  (window as unknown as { __arcade: object }).__arcade = {
+    /** Empieza un juego en local, como desde el menú. */
+    start: (id: GameId) => startLocal(id),
+    /** Avanza `n` pasos de simulación de `dt` segundos. */
+    step(n = 1, dt = 1 / 60) {
+      for (let i = 0; i < n; i++) screen?.update(dt);
+    },
+    /** Dibuja `n` veces (Bloques construye unos pocos chunks por dibujo). */
+    draw(n = 1) {
+      for (let i = 0; i < n; i++) render();
+    },
+    /** Pulsa o suelta una tecla (código como "KeyE"). */
+    key(code: string, down = true) {
+      window.dispatchEvent(new KeyboardEvent(down ? "keydown" : "keyup", { code, key: code }));
+    },
+    /** Juego en curso (p. ej. BlocksHost) para leer o preparar su estado. */
+    get game() {
+      return current;
+    },
+  };
+  showMain();
+  render();
+} else {
+  showMain();
+  requestAnimationFrame(frame);
+}

@@ -1,6 +1,9 @@
 // Controles de Bloques: WASD para andar, ratón (con el puntero capturado) o flechas para mirar,
-// romper/poner con clic o Q/E, 1–9 o la rueda para elegir bloque, F para volar.
+// romper con clic/Q, poner con clic derecho/Enter, 1–9 o la rueda para elegir, F para volar (creativo),
+// E/Tab/I para el inventario (supervivencia). Con el inventario abierto el puntero queda libre y los
+// clics van a las ranuras. La vista de VS Code sí deja capturar el puntero.
 import type { Keyboard } from "../core/keyboard";
+import { VH, VW } from "./config";
 
 const KEYS = {
   forward: ["KeyW"],
@@ -14,9 +17,18 @@ const KEYS = {
   lookUp: ["ArrowUp"],
   lookDown: ["ArrowDown"],
   dig: ["KeyQ"],
-  place: ["KeyE", "Enter", "NumpadEnter"],
+  place: ["Enter", "NumpadEnter"],
   fly: ["KeyF"],
+  inventory: ["KeyE", "Tab", "KeyI"],
 };
+
+/** Clic en la pantalla del inventario, en unidades lógicas del lienzo. */
+export interface UiClick {
+  x: number;
+  y: number;
+  button: number;
+  shift: boolean;
+}
 const DIGITS = ["Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9"];
 
 /** Entrada de un jugador de Bloques (teclado y ratón; en Node se sustituye por una falsa). */
@@ -39,10 +51,29 @@ export interface WalkSource {
   takeSlot(): number;
   takeScroll(): number;
   takeFly(): boolean;
+  takeInventory(): boolean;
+  /** Romper con el ratón (en supervivencia Q no rompe: tira). */
+  readonly digMouse: boolean;
+  /** Supervivencia: Q tira uno del objeto en la mano (1) o, con Ctrl, el montón entero (2); 0 = nada. */
+  takeThrow(): 0 | 1 | 2;
+  /** Con el inventario abierto: el ratón no se captura y los clics se guardan para las ranuras. */
+  setUi(open: boolean): void;
+  takeClicks(): UiClick[];
+  /** Posición del puntero libre (unidades lógicas). */
+  readonly cursor: [number, number];
 }
 
 // --- Ratón: estado compartido, enganchado una sola vez al lienzo del juego ---
-const mouse = { dx: 0, dy: 0, digs: 0, places: 0, dig: false, place: false, scroll: 0, attached: false };
+const mouse = {
+  dx: 0, dy: 0, digs: 0, places: 0, dig: false, place: false, scroll: 0, attached: false,
+  ui: false, clicks: [] as UiClick[], cursor: [VW / 2, VH / 2] as [number, number],
+};
+
+/** Punto de la pantalla en unidades lógicas del lienzo del juego. */
+function logical(canvas: HTMLElement, ev: MouseEvent): [number, number] {
+  const r = canvas.getBoundingClientRect();
+  return [((ev.clientX - r.left) / r.width) * VW, ((ev.clientY - r.top) / r.height) * VH];
+}
 
 /** ¿El puntero está capturado por el juego? (el HUD avisa si no). */
 export function pointerLocked(): boolean {
@@ -55,6 +86,11 @@ function attachMouse() {
   if (!canvas) return;
   mouse.attached = true;
   canvas.addEventListener("mousedown", (ev) => {
+    if (mouse.ui) {
+      const [x, y] = logical(canvas, ev);
+      mouse.clicks.push({ x, y, button: ev.button, shift: ev.shiftKey });
+      return;
+    }
     if (document.pointerLockElement !== canvas) {
       // El primer clic captura el puntero (si la vista lo permite); no rompe nada.
       try {
@@ -78,7 +114,10 @@ function attachMouse() {
   });
   canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
   document.addEventListener("mousemove", (ev) => {
-    if (document.pointerLockElement !== canvas) return;
+    if (document.pointerLockElement !== canvas) {
+      mouse.cursor = logical(canvas, ev);
+      return;
+    }
     mouse.dx += ev.movementX;
     mouse.dy += ev.movementY;
   });
@@ -104,12 +143,19 @@ export class BlocksInput implements WalkSource {
   lookX = 0;
   lookY = 0;
   digHeld = false;
+  digMouse = false;
   placeHeld = false;
   private held = new Set<string>();
+  private throws: (1 | 2)[] = [];
   private digs = 0;
   private places = 0;
   private slot = -1;
   private flies = 0;
+  private invs = 0;
+
+  get cursor(): [number, number] {
+    return mouse.cursor;
+  }
 
   constructor(private keyboard: Keyboard) {}
 
@@ -133,9 +179,14 @@ export class BlocksInput implements WalkSource {
     this.down = kb.anyDown(KEYS.down);
     this.lookX = axis(KEYS.lookRight, KEYS.lookLeft);
     this.lookY = axis(KEYS.lookUp, KEYS.lookDown);
-    if (this.pressed(KEYS.dig)) this.digs++;
+    if (this.pressed(KEYS.dig)) {
+      this.digs++;
+      this.throws.push(kb.anyDown(["ControlLeft", "ControlRight"]) ? 2 : 1);
+      if (this.throws.length > 4) this.throws.shift(); // en creativo nadie las recoge
+    }
     if (this.pressed(KEYS.place)) this.places++;
     if (this.pressed(KEYS.fly)) this.flies++;
+    if (this.pressed(KEYS.inventory)) this.invs++;
     DIGITS.forEach((code, i) => {
       if (this.pressed([code])) this.slot = i;
     });
@@ -143,6 +194,7 @@ export class BlocksInput implements WalkSource {
     this.places += mouse.places;
     mouse.digs = mouse.places = 0;
     this.digHeld = kb.anyDown(KEYS.dig) || mouse.dig;
+    this.digMouse = mouse.dig;
     this.placeHeld = kb.anyDown(KEYS.place) || mouse.place;
   }
 
@@ -181,7 +233,33 @@ export class BlocksInput implements WalkSource {
     this.flies--;
     return true;
   }
+
+  takeInventory(): boolean {
+    if (this.invs <= 0) return false;
+    this.invs--;
+    return true;
+  }
+
+  takeThrow(): 0 | 1 | 2 {
+    return this.throws.shift() ?? 0;
+  }
+
+  setUi(open: boolean) {
+    if (open === mouse.ui) return;
+    mouse.ui = open;
+    mouse.clicks = [];
+    mouse.dig = mouse.place = false;
+    if (open) releasePointer();
+  }
+
+  takeClicks(): UiClick[] {
+    const c = mouse.clicks;
+    mouse.clicks = [];
+    return c;
+  }
 }
 
 export const BLOCKS_HINT_1 = "WASD andar · ESPACIO saltar · F volar · RATÓN o FLECHAS mirar";
-export const BLOCKS_HINT_2 = "CLIC/Q romper · CLIC DER./E poner · 1-9 o RUEDA bloque · J juego";
+export const BLOCKS_HINT_2 = "CLIC/Q romper · CLIC DER./ENTER poner · 1-9 o RUEDA bloque · J juego";
+export const SURVIVAL_HINT_1 = "WASD andar · ESPACIO saltar · RATÓN mirar · E inventario · Q tirar";
+export const SURVIVAL_HINT_2 = "CLIC golpear · MANTÉN romper · CLIC DER. poner/comer/mesa · 1-9";

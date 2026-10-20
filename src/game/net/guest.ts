@@ -224,6 +224,10 @@ export class GuestSession {
     this.game?.draw(ctx, pixelScale);
   }
 
+  escape(): boolean {
+    return !!this.game?.escape?.();
+  }
+
   close() {
     this.closed = true;
     this.status = "lost";

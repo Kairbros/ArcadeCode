@@ -2,6 +2,7 @@ src/**
 !src/media/icon.png
 web/**
 scripts/**
+test/**
 api/**
 .cache/**
 vercel.json
