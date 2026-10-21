@@ -5,6 +5,7 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { WEAPONS, UPGRADED, type WeaponId } from "./defs";
+import { addDetails, applySurfaces, buildHands, disposeDetailAssets } from "./detail";
 
 export interface WeaponModel {
   group: THREE.Group;
@@ -32,6 +33,12 @@ function cached(key: string, make: () => THREE.MeshStandardMaterial): THREE.Mesh
 export function disposeWeaponAssets(): void {
   for (const m of matCache.values()) m.dispose();
   matCache.clear();
+  for (const m of reticleCache.values()) {
+    m.map?.dispose();
+    m.dispose();
+  }
+  reticleCache.clear();
+  disposeDetailAssets();
 }
 
 /** Perfil lateral (adelante, arriba) extruido a lo ancho: la silueta real de una pieza. */
@@ -46,7 +53,41 @@ function slabGeometry(pts: Pt[], width: number, bevel = 0.003): THREE.BufferGeom
   return g;
 }
 
-class Builder {
+const reticleCache = new Map<string, THREE.MeshBasicMaterial>();
+/** Material de la retícula: punto (y aro, en las holográficas) que brilla por encima de 1 para el bloom. */
+function reticleMaterial(color: [number, number, number], ring: boolean): THREE.MeshBasicMaterial {
+  const key = `${color.join(",")}${ring}`;
+  let m = reticleCache.get(key);
+  if (m) return m;
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#fff";
+  g.beginPath();
+  g.arc(32, 32, ring ? 3.2 : 5, 0, Math.PI * 2);
+  g.fill();
+  if (ring) {
+    g.strokeStyle = "#fff";
+    g.lineWidth = 3;
+    g.beginPath();
+    g.arc(32, 32, 20, 0, Math.PI * 2);
+    g.stroke();
+    for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
+      g.beginPath();
+      g.moveTo(32 + dx * 20, 32 + dy * 20);
+      g.lineTo(32 + dx * 27, 32 + dy * 27);
+      g.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  m = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false });
+  m.color.setRGB(color[0], color[1], color[2]);
+  reticleCache.set(key, m);
+  return m;
+}
+
+export class Builder {
   readonly g = new THREE.Group();
   readonly glow: THREE.MeshStandardMaterial[] = [];
   readonly steel: THREE.MeshStandardMaterial;
@@ -74,9 +115,15 @@ class Builder {
     this.lens = cached("lens", () => new THREE.MeshStandardMaterial({ color: 0x0a1a2a, emissive: 0x3a9bff, emissiveIntensity: 0.55, roughness: 0.1, metalness: 0.6 }));
     this.accentMat = cached(`glow${tint}`, () => new THREE.MeshStandardMaterial({ color: dim(0.2), emissive: tint, emissiveIntensity: 2.4, roughness: 0.3 }));
     if (up) this.glow.push(this.accentMat);
+    applySurfaces(this);
   }
 
-  private put<T extends THREE.Object3D>(o: T, x: number, y: number, f: number): T {
+  /** Material compartido por nombre (para las manos y los detalles). */
+  cachedMat(key: string, make: () => THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
+    return cached(key, make);
+  }
+
+  put<T extends THREE.Object3D>(o: T, x: number, y: number, f: number): T {
     o.position.set(x, y, -f);
     this.g.add(o);
     return o;
@@ -110,21 +157,26 @@ class Builder {
     this.box(w, h, d, this.up ? this.accentMat : this.dark, x, y, f, 0.001);
   }
 
-  /** Guantes y antebrazos de primera persona. */
+  /** Mira de punto rojo / holográfica: marco abierto, cristal tenue y retícula que brilla (el ojo mira a través). */
+  reflex(y: number, f: number, color: [number, number, number], ring: boolean): void {
+    const w = 0.034, h = 0.032, d = 0.05;
+    this.box(w * 0.7, 0.016, d * 0.75, this.dark, 0, y - h / 2 - 0.014, f, 0.003); // montura
+    this.box(w + 0.01, 0.006, d, this.dark, 0, y - h / 2 - 0.003, f, 0.002); // base
+    this.box(0.004, h + 0.01, d, this.dark, w / 2 + 0.003, y, f, 0.001);
+    this.box(0.004, h + 0.01, d, this.dark, -w / 2 - 0.003, y, f, 0.001);
+    this.box(w + 0.01, 0.006, d * 0.6, this.dark, 0, y + h / 2 + 0.003, f + d * 0.2, 0.002); // visera
+    const glassMat = cached("glassSight", () => new THREE.MeshStandardMaterial({ color: 0x7ab8ff, transparent: true, opacity: 0.1, depthWrite: false, side: THREE.DoubleSide, roughness: 0.05, metalness: 0 }));
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(w, h), glassMat);
+    this.put(glass, 0, y, f + d * 0.38);
+    const ret = new THREE.Mesh(new THREE.PlaneGeometry(0.018, 0.018), reticleMaterial(color, ring));
+    ret.renderOrder = 20;
+    this.put(ret, 0, y, f + d * 0.36);
+    ret.name = "reticle";
+  }
+
+  /** Guantes con dedos y antebrazos de primera persona (ver `detail.ts`). */
   hands(rightF: number, leftF: number, leftY: number): void {
-    const glove = cached("glove", () => new THREE.MeshStandardMaterial({ color: 0x2a2c31, roughness: 0.95, metalness: 0.02 }));
-    const cloth = cached("cloth", () => new THREE.MeshStandardMaterial({ color: 0x2f3629, roughness: 1 }));
-    const strap = cached("strap", () => new THREE.MeshStandardMaterial({ color: 0x8a1f1a, roughness: 0.9 }));
-    const rh = this.box(0.085, 0.1, 0.12, glove, 0.012, -0.045, rightF, 0.02);
-    rh.rotation.x = 0.2;
-    const ra = this.box(0.095, 0.095, 0.4, cloth, 0.04, -0.12, rightF - 0.24, 0.025);
-    ra.rotation.set(0.5, 0.1, 0);
-    this.box(0.1, 0.03, 0.05, strap, 0.04, -0.12, rightF - 0.1, 0.01).rotation.set(0.5, 0.1, 0);
-    const lh = this.box(0.09, 0.085, 0.13, glove, -0.012, leftY, leftF, 0.02);
-    lh.rotation.x = -0.05;
-    const la = this.box(0.095, 0.09, 0.46, cloth, -0.085, leftY - 0.09, leftF - 0.28, 0.025);
-    la.rotation.set(0.34, -0.5, 0.12);
-    for (let i = 0; i < 3; i++) this.box(0.02, 0.022, 0.05, glove, -0.012 + i * 0.001, leftY + 0.048, leftF + 0.04 - i * 0.032, 0.006);
+    buildHands(this, rightF, leftF, leftY);
   }
 }
 
@@ -181,8 +233,8 @@ function revolver(b: Builder): { muzzle: number; eject: [number, number, number]
   b.cyl(0.016, 0.24, b.steel, 0, 0.07, 0.07);
   b.box(0.026, 0.026, 0.2, b.steel, 0, 0.038, 0.19, 0.003); // camisa inferior del cañón
   b.cyl(0.011, 0.012, b.dark, 0, 0.07, 0.309);
-  b.box(0.006, 0.014, 0.014, b.dark, 0, 0.095, 0.3);
-  b.box(0.01, 0.026, 0.03, b.dark, 0, 0.108, -0.066).rotation.x = -0.5; // martillo
+  b.box(0.006, 0.014, 0.014, b.dark, 0, 0.106, 0.3);
+  b.box(0.01, 0.02, 0.026, b.dark, 0, 0.1, -0.066).rotation.x = -0.5; // martillo
   b.slab([[-0.075, 0.02], [-0.012, 0.02], [0.012, -0.12], [-0.06, -0.145], [-0.095, -0.07]], 0.034, b.wood, 0, 0, 0, 0.005);
   b.accent(0.03, 0.006, 0.18, 0, 0.0955, 0.12);
   return { muzzle: 0.322, eject: [0.0, 0.04, -0.045], left: [0.0, -0.09] };
@@ -204,8 +256,7 @@ function smg(b: Builder): { muzzle: number; eject: [number, number, number]; lef
   b.box(0.01, 0.01, 0.15, b.steel, -0.02, 0.07, -0.16, 0.002);
   b.box(0.05, 0.075, 0.016, b.poly, 0, 0.065, -0.245, 0.004);
   // Mira de punto rojo.
-  b.box(0.034, 0.036, 0.06, b.dark, 0, 0.14, 0.04, 0.006);
-  b.box(0.024, 0.024, 0.004, b.lens, 0, 0.142, 0.012, 0.001);
+  b.reflex(0.15, 0.04, [3.2, 0.3, 0.22], false);
   b.accent(0.046, 0.008, 0.2, 0, 0.083, 0.08);
   mark(b.box(0.04, 0.02, 0.07, b.steel, 0.0, 0.07, 0.0, 0.003));
   return { muzzle: 0.51, eject: [0.03, 0.08, 0.04], left: [0.3, -0.055] };
@@ -216,7 +267,7 @@ function shotgun(b: Builder): { muzzle: number; eject: [number, number, number];
   b.cyl(0.0185, 0.52, b.dark, 0, 0.065, 0.1, 14); // cañón
   b.cyl(0.0165, 0.4, b.steel, 0, 0.022, 0.1, 12); // tubo del cargador
   b.cyl(0.021, 0.014, b.steel, 0, 0.022, 0.5, 12);
-  b.box(0.006, 0.014, 0.014, b.brass, 0, 0.093, 0.605); // punto de mira
+  b.box(0.006, 0.016, 0.014, b.brass, 0, 0.104, 0.605); // punto de mira
   b.cyl(0.012, 0.012, b.dark, 0, 0.065, 0.62, 10);
   // Cañón bombeable de madera con estrías.
   const pump = b.box(0.062, 0.058, 0.2, b.wood, 0, 0.034, 0.34, 0.012);
@@ -249,8 +300,7 @@ function rifle(b: Builder): { muzzle: number; eject: [number, number, number]; l
   b.slab([[-0.09, 0.09], [-0.34, 0.07], [-0.34, -0.03], [-0.3, -0.07], [-0.09, 0.0]], 0.04, b.poly, 0, 0, 0, 0.005);
   b.box(0.044, 0.1, 0.014, b.dark, 0, 0.0, -0.343, 0.004);
   // Mira holográfica.
-  b.box(0.036, 0.05, 0.07, b.dark, 0, 0.19, 0.0, 0.006);
-  b.box(0.026, 0.034, 0.004, b.lens, 0, 0.195, -0.034, 0.001);
+  b.reflex(0.2, 0.0, [0.4, 3.0, 0.8], true);
   b.accent(0.046, 0.01, 0.22, 0, 0.1, 0.06);
   mark(b.box(0.046, 0.028, 0.07, b.steel, 0.0, 0.112, 0.07, 0.002));
   return { muzzle: 0.66, eject: [0.03, 0.1, 0.05], left: [0.34, 0.0] };
@@ -263,11 +313,10 @@ function lmg(b: Builder): { muzzle: number; eject: [number, number, number]; lef
   for (let i = 0; i < 9; i++) b.box(0.012, 0.012, 0.016, b.dark, 0.03, 0.07, 0.3 + i * 0.03, 0.001);
   b.cyl(0.014, 0.12, b.dark, 0, 0.07, 0.6, 10);
   b.cyl(0.021, 0.04, b.steel, 0, 0.07, 0.72, 10, 0.017);
-  b.box(0.006, 0.05, 0.01, b.dark, 0, 0.11, 0.6);
-  // Asa de transporte.
-  b.box(0.012, 0.05, 0.012, b.steel, 0, 0.19, 0.2);
-  b.box(0.012, 0.05, 0.012, b.steel, 0, 0.19, 0.06);
-  b.box(0.018, 0.012, 0.17, b.poly, 0, 0.222, 0.13, 0.004);
+  b.box(0.007, 0.08, 0.01, b.dark, 0, 0.15, 0.6); // punto de mira alto
+  b.box(0.012, 0.034, 0.012, b.dark, 0.016, 0.176, 0.0); // alza de dos pilares
+  b.box(0.012, 0.034, 0.012, b.dark, -0.016, 0.176, 0.0);
+  b.box(0.018, 0.012, 0.17, b.poly, 0, 0.178, 0.3, 0.004); // asa baja
   // Caja de munición y cinta.
   b.box(0.07, 0.12, 0.14, b.poly, 0.0, -0.095, 0.12, 0.01);
   for (let i = 0; i < 5; i++) b.cyl(0.006, 0.05, b.brass, 0.03, -0.01 + i * 0.0, 0.0, 6).position.set(0.04, -0.04 - i * 0.004, -0.08 - i * 0.012);
@@ -338,6 +387,7 @@ function pulse(b: Builder): { muzzle: number; eject: [number, number, number]; l
   b.box(0.07, 0.05, 0.11, b.dark, 0, 0.14, 0.0, 0.01); // celda de energía
   b.box(0.05, 0.03, 0.08, glow, 0, 0.14, 0.0, 0.004);
   b.box(0.06, 0.012, 0.18, b.steel, 0, 0.125, 0.18, 0.003);
+  b.reflex(0.2, 0.0, [0.3, 2.2, 3.2], true);
   return { muzzle: 0.68, eject: [0, 0, 0], left: [0.3, -0.03] };
 }
 
@@ -350,6 +400,7 @@ export function buildWeaponModel(id: WeaponId, upgraded: boolean, hands = false)
   const def = upgraded ? UPGRADED[id] : WEAPONS[id];
   const b = new Builder(upgraded, def.tint, id);
   const spec = MAKERS[id](b);
+  addDetails(b, id);
   if (hands) b.hands(0, spec.left[0], spec.left[1]);
   b.g.traverse((o) => {
     o.castShadow = false;

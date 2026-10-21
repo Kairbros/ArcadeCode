@@ -38,6 +38,11 @@ export class WeaponSystem {
   /** Segundos que quedan de la recarga o del cambio. */
   timer = 0;
   private cooldown = 0;
+  /** Ventajas: Speed Cola (tiempo de recarga ×) y Double Tap (cadencia ×); y disparo automático forzado (ametralladora). */
+  reloadScale = 1;
+  rateScale = 1;
+  autoAll = false;
+  private reloadLen = 1;
   /** ¿El gatillo ya estaba pulsado? Para las semiautomáticas. */
   private held = false;
 
@@ -189,7 +194,8 @@ export class WeaponSystem {
     const a = this.ammo[def.id];
     if (a.mag >= def.magSize || a.reserve <= 0) return false;
     this.state = "reloading";
-    this.timer = def.reloadTime;
+    this.reloadLen = def.reloadTime * this.reloadScale;
+    this.timer = this.reloadLen;
     return true;
   }
 
@@ -210,20 +216,45 @@ export class WeaponSystem {
    * Intenta disparar. `down` es el gatillo mantenido y `pressed` el flanco del clic.
    * Devuelve el disparo o null si no toca.
    */
-  fire(down: boolean, pressed: boolean): Shot | null {
+  fire(down: boolean, pressed: boolean, free = false): Shot | null {
     const def = this.current;
     if (!def) return null;
     if (this.state !== "ready" || this.cooldown > 0) return null;
-    const allowed = def.auto ? down : pressed || (down && !this.held);
+    const allowed = def.auto || this.autoAll ? down : pressed || (down && !this.held);
     this.held = down;
     if (!allowed) return null;
     const a = this.ammo[def.id];
     if (a.mag <= 0) {
       return null;
     }
-    a.mag -= 1;
-    this.cooldown = 60 / def.rpm;
+    if (!free) a.mag -= 1; // con munición infinita no se gasta
+    this.cooldown = 60 / (def.rpm * this.rateScale);
     return { def, pellets: def.pellets, spread: def.spread };
+  }
+
+  /** Sin una sola bala (ni en el cargador ni de reserva): toca el cuchillo. */
+  get outOfAmmo(): boolean {
+    const a = this.currentAmmo;
+    return a.mag <= 0 && a.reserve <= 0;
+  }
+
+  /** Poder «munición máxima»: todas las armas que lleva, con el cargador y la reserva llenos. */
+  refillAll(): void {
+    for (const id of this.slots) {
+      if (!id) continue;
+      const def = this.def(id);
+      this.ammo[id] = { mag: def.magSize, reserve: def.reserveMax };
+    }
+    if (this.state === "reloading") {
+      this.state = "ready";
+      this.timer = 0;
+    }
+  }
+
+  /** Llena el cargador del arma de la mano (al empezar la munición infinita). */
+  fillMag(): void {
+    const def = this.current;
+    if (def) this.ammo[def.id].mag = def.magSize;
   }
 
   /** ¿Está el cargador vacío? (para el chasquido en seco). */
@@ -234,7 +265,7 @@ export class WeaponSystem {
   get reloadProgress(): number {
     const def = this.current;
     if (!def || this.state !== "reloading") return 0;
-    return 1 - this.timer / def.reloadTime;
+    return 1 - this.timer / this.reloadLen;
   }
 
   /** Reinicio de partida. */

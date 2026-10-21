@@ -10,8 +10,9 @@ import type { Points } from "./points";
 import type { BarricadeWindow, BuiltMap } from "../world/map";
 import { MAX_PLANKS } from "../world/map";
 import { dist2D } from "../core/math";
+import { addPerk, hasPerk, PERKS, type PerkId } from "./perks";
 
-export type InteractKind = "door" | "buy" | "box" | "boxTake" | "window" | "power" | "upgrade" | "upgradeTake" | "info";
+export type InteractKind = "door" | "buy" | "box" | "boxTake" | "window" | "power" | "upgrade" | "upgradeTake" | "perk" | "revive" | "info";
 
 export interface Prompt {
   kind: InteractKind;
@@ -26,14 +27,18 @@ export interface Prompt {
 export interface PlayerCtx {
   points: Points;
   weapons: WeaponSystem;
+  /** Ventajas que lleva (máscara de bits de `game/perks.ts`). */
+  perks: number;
 }
 
 export interface InteractHooks {
   /** Aviso para el jugador `who` (en pantalla) y sonido (comprar, negar, caja, reparar…). */
   toast: (who: number, msg: string, kind?: "info" | "good" | "bad") => void;
-  sound: (who: number, name: "buy" | "deny" | "boxOpen" | "repair" | "papStart" | "papDone" | "power" | "boxTick") => void;
+  sound: (who: number, name: "buy" | "deny" | "boxOpen" | "repair" | "papStart" | "papDone" | "power" | "boxTick" | "teddy" | "boxMove") => void;
   onDoorOpen: (id: string) => void;
   onWeaponChange: (who: number) => void;
+  /** El jugador acaba de comprar una ventaja (hay que aplicarle sus efectos). */
+  onPerk?: (who: number) => void;
   /** Contexto de cada jugador (para entregar el premio de la caja a quien la abrió). */
   ctxOf: (who: number) => PlayerCtx | null;
 }
@@ -43,12 +48,24 @@ export const BOX_ROLL = 4.2;
 export const BOX_OFFER = 9;
 export const UPGRADE_WORK = 3.6;
 export const UPGRADE_OFFER = 15;
+/** Segundos que se ve el oso antes de que la caja se vaya. */
+export const TEDDY_TIME = 3.6;
+
+/** Probabilidad de que la caja dé el oso tras `uses` usos en el mismo sitio (nunca en los dos primeros). */
+export function teddyChance(uses: number): number {
+  return uses < 2 ? 0 : Math.min(0.5, 0.12 + 0.08 * (uses - 2));
+}
 
 export class Interactions {
   private boxT = 0;
   private boxFinal: WeaponId | null = null;
   private boxWho = -1;
   private boxSwap = 0;
+  /** Usos de la caja en su sitio actual y si la tirada actual es el oso. */
+  private boxUses = 0;
+  private boxTeddy = false;
+  /** Fuente de azar (se puede cambiar en las pruebas). */
+  rng: () => number = Math.random;
   private upT = 0;
   private upHeld: Held | null = null;
   private upWho = -1;
@@ -132,7 +149,7 @@ export class Interactions {
       if (box.phase === 0) prompt = { kind: "box", label: "CAJA MISTERIOSA", cost: box.price, id: "mystery_box" };
       else if (box.phase === 2 && this.boxWho === who && this.boxFinal) {
         prompt = { kind: "boxTake", label: `COGER ${weaponDef(this.boxFinal).name}`, cost: 0, id: "mystery_box" };
-      } else prompt = { kind: "info", label: box.phase === 1 ? "LA CAJA ESTÁ GIRANDO…" : "ARMA DE OTRO JUGADOR", cost: 0, id: "mystery_box" };
+      } else prompt = { kind: "info", label: box.phase === 1 ? "LA CAJA ESTÁ GIRANDO…" : box.phase === 3 ? "¡EL OSO! LA CAJA SE VA…" : "ARMA DE OTRO JUGADOR", cost: 0, id: "mystery_box" };
       candidates.push({ prompt, score: scoreOf(box.position.x, box.position.z) + 0.4 });
     }
     // Mejorador de armas.
@@ -154,6 +171,16 @@ export class Interactions {
         prompt = { kind: "upgrade", label: `MEJORAR ${WEAPONS[cur].name}`, cost: UPGRADE_PRICE, id: "upgrader" };
       }
       candidates.push({ prompt, score: scoreOf(up.position.x, up.position.z) + 0.4 });
+    }
+    // Máquinas de ventajas.
+    for (const m of this.map.perks) {
+      if (dist2D(eye.x, eye.z, m.position.x, m.position.z) > 2.3) continue;
+      const def = PERKS[m.id];
+      let prompt: Prompt;
+      if (hasPerk(ctx.perks, m.id)) prompt = { kind: "info", label: `YA TIENES ${def.name}`, cost: 0, id: m.id };
+      else if (def.needsPower && !this.map.power.on) prompt = { kind: "info", label: "SIN ENERGÍA · ACTIVA EL INTERRUPTOR", cost: 0, id: m.id };
+      else prompt = { kind: "perk", label: `${def.name} · ${def.desc}`, cost: def.cost, id: m.id };
+      candidates.push({ prompt, score: scoreOf(m.position.x, m.position.z) + 0.4 });
     }
     // Interruptor de la energía.
     const pw = this.map.power;
@@ -211,7 +238,9 @@ export class Interactions {
         // No sale un arma que ya lleva (salvo que las lleve todas).
         const pool = BOX_POOL.filter((id) => !weapons.has(id));
         const from = pool.length ? pool : BOX_POOL;
-        this.boxFinal = from[Math.floor(Math.random() * from.length)];
+        this.boxUses += 1;
+        this.boxTeddy = this.rng() < teddyChance(this.boxUses - 1);
+        this.boxFinal = this.boxTeddy ? null : from[Math.floor(this.rng() * from.length)];
         this.boxWho = who;
         this.boxT = 0;
         this.boxSwap = 0;
@@ -235,7 +264,7 @@ export class Interactions {
         if (this.map.power.on) return false;
         this.map.power.on = true;
         this.hooks.sound(who, "power");
-        this.hooks.toast(-1, "¡LA ENERGÍA ESTÁ ACTIVA! EL MEJORADOR FUNCIONA", "good");
+        this.hooks.toast(-1, "¡LA ENERGÍA ESTÁ ACTIVA! MEJORADOR Y VENTAJAS FUNCIONAN", "good");
         return true;
       }
       case "upgrade": {
@@ -261,7 +290,20 @@ export class Interactions {
         this.returnUpgraded(ctx, who);
         return true;
       }
+      case "perk": {
+        const def = PERKS[p.id as PerkId];
+        const m = this.map.perks.find((x) => x.id === p.id);
+        if (!def || !m || hasPerk(ctx.perks, def.id)) return false;
+        if (def.needsPower && !this.map.power.on) return false;
+        if (!points.spend(def.cost)) return deny();
+        ctx.perks = addPerk(ctx.perks, def.id);
+        this.hooks.sound(who, "buy");
+        this.hooks.toast(who, `${def.name} · −${def.cost}`, "good");
+        this.hooks.onPerk?.(who);
+        return true;
+      }
       case "window":
+      case "revive":
       case "info":
         return false;
     }
@@ -282,9 +324,24 @@ export class Interactions {
     this.hooks.onWeaponChange(who);
   }
 
+  /** La caja desaparece del sitio donde estaba y reaparece en otro (distinto del actual). */
+  private relocateBox(): void {
+    const box = this.map.box;
+    const spots = this.map.def.boxSpots;
+    const options = spots.map((_, i) => i).filter((i) => i !== box.spot);
+    const next = options[Math.floor(this.rng() * options.length)];
+    this.closeBox();
+    this.boxUses = 0;
+    this.map.moveBox(next);
+    this.hooks.sound(-2, "boxMove");
+    this.hooks.toast(-1, `LA CAJA HA APARECIDO EN: ${spots[next].name}`, "info");
+  }
+
   private closeBox(): void {
     const box = this.map.box;
     box.phase = 0;
+    box.teddy = false;
+    this.boxTeddy = false;
     box.shown = null;
     box.left = 0;
     this.boxFinal = null;
@@ -313,10 +370,20 @@ export class Interactions {
   /** Avanza la caja (ruleta y oferta) y el mejorador (trabajo y recogida). */
   update(dt: number): void {
     const box = this.map.box;
-    if (box.phase === 1 && this.boxFinal) {
+    if (box.phase === 1 && (this.boxFinal || this.boxTeddy)) {
       this.boxT += dt;
       this.boxSwap -= dt;
-      if (this.boxT >= BOX_ROLL) {
+      if (this.boxT >= BOX_ROLL && this.boxTeddy) {
+        // ¡El oso! Se devuelve lo pagado y la caja se va a otro sitio.
+        box.phase = 3;
+        box.teddy = true;
+        box.shown = null;
+        this.boxT = 0;
+        box.left = TEDDY_TIME;
+        this.hooks.ctxOf(this.boxWho)?.points.refund(box.price);
+        this.hooks.sound(-2, "teddy");
+        this.hooks.toast(-1, "¡EL OSO! LA CAJA SE VA · TE DEVUELVE LOS PUNTOS", "bad");
+      } else if (this.boxT >= BOX_ROLL) {
         box.phase = 2;
         box.shown = this.boxFinal;
         this.boxT = 0;
@@ -330,6 +397,10 @@ export class Interactions {
         if (next === box.shown) next = BOX_POOL[(BOX_POOL.indexOf(next) + 1) % BOX_POOL.length];
         box.shown = next;
       }
+    } else if (box.phase === 3) {
+      this.boxT += dt;
+      box.left = Math.max(0, TEDDY_TIME - this.boxT);
+      if (box.left <= 0) this.relocateBox();
     } else if (box.phase === 2) {
       this.boxT += dt;
       box.left = Math.max(0, BOX_OFFER - this.boxT);
@@ -368,19 +439,26 @@ export class Interactions {
     const box = this.map.box;
     const up = this.map.upgrader;
     return {
-      bx: [box.phase, weaponIndex(box.shown), this.boxWho, Math.round(box.left * 10) / 10],
+      bx: [box.phase, weaponIndex(box.shown), this.boxWho, Math.round(box.left * 10) / 10, box.spot],
       pu: [this.map.power.on ? 1 : 0, up.phase, this.upWho, weaponIndex(up.shown), up.shownUpgraded ? 1 : 0, Math.round(up.left * 10) / 10],
     };
   }
 
   /** Tablones visibles según el estado. */
-  paintPlanks(w: BarricadeWindow): void {
-    w.group.children.forEach((child, i) => {
-      child.visible = i < w.planks;
-    });
+  paintPlanks(w: BarricadeWindow, snap = false): void {
+    if (snap) w.rig.snap(w.planks);
+    else w.rig.set(w.planks);
     // Con un solo tablón el hueco sigue cerrado: los zombis trepan el alféizar, así que lo que los frena
     // (a ellos, a las balas y a la vista) es este colisionador. Al arrancar el último se apaga.
     w.barricade.enabled = w.planks > 0;
+  }
+
+  /** Poder «carpintero»: todas las barricadas vuelven a estar enteras. */
+  restoreAll(): void {
+    for (const w of this.map.windows) {
+      w.planks = MAX_PLANKS;
+      this.paintPlanks(w);
+    }
   }
 
   /** Los zombis arrancan tablones al llegar a la ventana. */
@@ -392,6 +470,8 @@ export class Interactions {
 
   reset(): void {
     this.closeBox();
+    this.boxUses = 0;
+    this.map.moveBox(0);
     this.boxSwap = 0;
     this.upHeld = null;
     this.upWho = -1;
@@ -405,12 +485,12 @@ export class Interactions {
     up.powered = false;
     for (const w of this.map.windows) {
       w.planks = MAX_PLANKS;
-      this.paintPlanks(w);
+      this.paintPlanks(w, true);
     }
     for (const d of this.map.doors) {
       d.open = false;
       d.k = 0;
-      d.panel.rotation.y = 0;
+      d.panel.position.y = 0;
       d.collider.enabled = true;
     }
   }
@@ -420,9 +500,11 @@ export class Interactions {
 export function applyMachineState(map: BuiltMap, bx: number[], pu: number[]): void {
   const box = map.box;
   const up = map.upgrader;
-  box.phase = (bx[0] ?? 0) as 0 | 1 | 2;
+  box.phase = (bx[0] ?? 0) as 0 | 1 | 2 | 3;
+  box.teddy = box.phase === 3;
   box.shown = weaponAt(bx[1] ?? -1);
   box.left = bx[3] ?? 0;
+  if ((bx[4] ?? 0) !== box.spot) map.moveBox(bx[4] ?? 0);
   map.power.on = pu[0] === 1;
   up.phase = (pu[1] ?? 0) as 0 | 1 | 2;
   up.shown = weaponAt(pu[3] ?? -1);

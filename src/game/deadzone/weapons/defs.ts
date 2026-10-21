@@ -57,7 +57,7 @@ const BASE: Record<WeaponId, Base> = {
     auto: false,
     recoil: 0.9,
     pierce: 0,
-    headshot: 2.6,
+    headshot: 3.4,
     adsZoom: 1.15,
     look: { length: 0.34, color: 0x2a2f36, body: 0x3c444e },
   },
@@ -77,7 +77,7 @@ const BASE: Record<WeaponId, Base> = {
     auto: false,
     recoil: 1.9,
     pierce: 1,
-    headshot: 2.8,
+    headshot: 3.8,
     adsZoom: 1.2,
     look: { length: 0.4, color: 0x2c2f33, body: 0x5a5f66 },
   },
@@ -97,7 +97,7 @@ const BASE: Record<WeaponId, Base> = {
     auto: true,
     recoil: 0.55,
     pierce: 0,
-    headshot: 2,
+    headshot: 2.8,
     adsZoom: 1.12,
     look: { length: 0.5, color: 0x232a24, body: 0x2f3a33 },
   },
@@ -117,7 +117,7 @@ const BASE: Record<WeaponId, Base> = {
     auto: false,
     recoil: 2.1,
     pierce: 0,
-    headshot: 1.6,
+    headshot: 2.4,
     adsZoom: 1.05,
     look: { length: 0.72, color: 0x4a2b18, body: 0x2c2018 },
   },
@@ -137,7 +137,7 @@ const BASE: Record<WeaponId, Base> = {
     auto: true,
     recoil: 0.85,
     pierce: 1,
-    headshot: 2.2,
+    headshot: 3.2,
     adsZoom: 1.3,
     look: { length: 0.64, color: 0x2a2a24, body: 0x3a3a30 },
   },
@@ -157,7 +157,7 @@ const BASE: Record<WeaponId, Base> = {
     auto: true,
     recoil: 0.7,
     pierce: 1,
-    headshot: 1.9,
+    headshot: 2.8,
     adsZoom: 1.2,
     look: { length: 0.78, color: 0x24282c, body: 0x394048 },
   },
@@ -177,7 +177,7 @@ const BASE: Record<WeaponId, Base> = {
     auto: false,
     recoil: 2.8,
     pierce: 3,
-    headshot: 3.4,
+    headshot: 5,
     adsZoom: 2.6,
     look: { length: 0.95, color: 0x20241f, body: 0x343b30 },
   },
@@ -197,7 +197,7 @@ const BASE: Record<WeaponId, Base> = {
     auto: false,
     recoil: 2.6,
     pierce: 4,
-    headshot: 3,
+    headshot: 4,
     adsZoom: 1.6,
     look: { length: 0.8, color: 0x1b2c3a, body: 0x24435c },
   },
@@ -276,3 +276,31 @@ export const weaponDef = (id: WeaponId, upgraded = false): WeaponDef => (upgrade
 export const WEAPON_IDS: readonly WeaponId[] = IDS;
 export const weaponIndex = (id: WeaponId | null): number => (id ? IDS.indexOf(id) : -1);
 export const weaponAt = (k: number): WeaponId | null => IDS[k] ?? null;
+
+/** El cuchillo: siempre disponible (tecla V) y, cuando no queda ni una bala, también con el clic. No gasta munición. */
+export const KNIFE = {
+  /** Daño de un tajo (mata a los infectados normales de las primeras rondas de un golpe). */
+  damage: 150,
+  /** Alcance (m), apertura del cono por delante (rad) y segundos entre tajos. */
+  reach: 2.0,
+  cone: 0.7,
+  cooldown: 0.7,
+  /** Segundos que dura la animación en primera persona. */
+  swing: 0.42,
+} as const;
+
+/**
+ * Línea de mira de cada arma al apuntar: altura `y` y posición local `z` del punto por el que mira el ojo (z > 0 = hacia
+ * el jugador), distancia del ojo a ese punto (`relief`), campo de visión al apuntar (`fov`) y si es una mira telescópica
+ * que tapa la pantalla con su retícula (`scope`). El modelo se coloca de forma que ese punto caiga en el centro de la pantalla.
+ */
+export const SIGHTS: Record<WeaponId, { y: number; z: number; relief: number; fov: number; scope?: boolean }> = {
+  pistol: { y: 0.091, z: 0.07, relief: 0.32, fov: 68 },
+  revolver: { y: 0.113, z: 0.07, relief: 0.32, fov: 66 },
+  smg: { y: 0.15, z: -0.015, relief: 0.3, fov: 62 },
+  shotgun: { y: 0.108, z: 0.06, relief: 0.3, fov: 66 },
+  rifle: { y: 0.2, z: 0.025, relief: 0.28, fov: 56 },
+  lmg: { y: 0.192, z: 0.0, relief: 0.3, fov: 60 },
+  sniper: { y: 0.13, z: 0.152, relief: 0.1, fov: 17, scope: true },
+  pulse: { y: 0.2, z: 0.025, relief: 0.28, fov: 58 },
+};

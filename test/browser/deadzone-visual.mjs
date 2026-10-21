@@ -2,6 +2,7 @@
 // y los zombis (npm run shot -- test/browser/deadzone-visual.mjs).
 export default async function ({ js, start, step, draw, shot }) {
   await start("deadzone");
+  await js(`(() => { const g = __arcade.game; g.phase = "play"; g.loadMap(window.__dzMap || "sector09"); })()`);
   await step(0.5);
   const tp = (x, z, yaw, pitch = 0) => js(`(() => { const g = __arcade.game, p = g.seats[0].p; g.stage.zombies.clear();
     p.position.set(${x}, 0, ${z}); p.yaw = ${yaw}; p.pitch = ${pitch}; p.velocity.set(0, 0, 0); })()`);

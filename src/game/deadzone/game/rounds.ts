@@ -26,13 +26,13 @@ export const ROUNDS: RoundTuning = {
   baseCount: 6,
   perRound: 4,
   growthPow: 1.55,
-  maxAliveBase: 10,
-  maxAlivePerRound: 1.5,
-  maxAliveCap: 24,
-  intervalStart: 2.1,
-  intervalStep: 0.11,
-  intervalMin: 0.45,
-  intermission: 6,
+  maxAliveBase: 14,
+  maxAlivePerRound: 2,
+  maxAliveCap: 32,
+  intervalStart: 0.9,
+  intervalStep: 0.06,
+  intervalMin: 0.2,
+  intermission: 5,
   healOnRoundEnd: 12,
 };
 
@@ -51,10 +51,24 @@ export function maxAlive(round: number, tune: RoundTuning = ROUNDS): number {
   return Math.min(tune.maxAliveCap, Math.round(tune.maxAliveBase + tune.maxAlivePerRound * (r - 1)));
 }
 
+/** Rondas de perros infernales (como en BO2: la primera en la 5 y luego cada cuatro). */
+export function isDogRound(round: number): boolean {
+  return round >= 5 && (round - 5) % 4 === 0;
+}
+
+/** Perros de una ronda de perros: 6, y 2 más cada vez (escala con los jugadores como el resto de rondas). */
+export function dogTotal(round: number, tune: RoundTuning = ROUNDS): number {
+  const n = 6 + Math.max(0, Math.floor((round - 5) / 4)) * 2;
+  return Math.max(4, Math.round(n * (tune.baseCount / ROUNDS.baseCount)));
+}
+
+/** Perros vivos a la vez y segundos entre apariciones en una ronda de perros. */
+export const DOG_ROUND = { maxAlive: 10, interval: 1.2 } as const;
+
 export type RoundState = "waiting" | "intermission" | "spawning";
 
 export type RoundEvent =
-  | { type: "roundStart"; round: number; total: number }
+  | { type: "roundStart"; round: number; total: number; special: boolean }
   | { type: "spawn" }
   | { type: "roundEnd"; round: number };
 
@@ -70,6 +84,8 @@ export class RoundManager {
   total = 0;
   /** Muertes de la ronda en curso. */
   killed = 0;
+  /** Ronda de perros infernales. */
+  special = false;
   readonly tune: RoundTuning;
 
   constructor(tune: RoundTuning = ROUNDS) {
@@ -81,19 +97,21 @@ export class RoundManager {
     this.state = "waiting";
     this.alive = 0;
     this.killed = 0;
+    this.special = false;
     return this.beginRound();
   }
 
   private beginRound(): RoundEvent[] {
     this.round += 1;
-    this.total = roundTotal(this.round, this.tune);
+    this.special = isDogRound(this.round);
+    this.total = this.special ? dogTotal(this.round, this.tune) : roundTotal(this.round, this.tune);
     this.toSpawn = this.total;
     this.alive = 0;
     this.killed = 0;
     this.state = "spawning";
     // Un respiro al empezar la ronda.
-    this.timer = this.round === 1 ? 2.5 : 1.4;
-    return [{ type: "roundStart", round: this.round, total: this.total }];
+    this.timer = this.round === 1 ? 1.2 : 0.5;
+    return [{ type: "roundStart", round: this.round, total: this.total, special: this.special }];
   }
 
   onZombieDead(): void {
@@ -114,12 +132,12 @@ export class RoundManager {
 
     this.timer -= dt;
     if (this.state === "spawning") {
-      const cap = maxAlive(this.round, this.tune);
+      const cap = this.special ? Math.min(DOG_ROUND.maxAlive, maxAlive(this.round, this.tune)) : maxAlive(this.round, this.tune);
       if (this.timer <= 0 && this.toSpawn > 0 && this.alive < cap) {
         this.toSpawn -= 1;
         this.alive += 1;
         events.push({ type: "spawn" });
-        this.timer = spawnInterval(this.round, this.tune);
+        this.timer = this.special ? DOG_ROUND.interval : spawnInterval(this.round, this.tune);
       }
       // La ronda acaba cuando han aparecido todos y no queda ninguno vivo.
       if (this.toSpawn === 0 && this.alive === 0) {

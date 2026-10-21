@@ -1,4 +1,4 @@
-// Escena 3D de Dead Zone, común al anfitrión y a los invitados: el SECTOR 09 con su cielo de tormenta, la lluvia y
+// Escena 3D de Dead Zone, común al anfitrión y a los invitados: el SECTOR 09 con su cielo de tormenta, la ceniza y
 // la niebla, la luna con sombras, las luces más cercanas (un grupo fijo de luces que salta de fuente en fuente), el
 // mapa de entorno para los reflejos, la cámara con el arma, los zombis, los demás jugadores y los efectos. Se
 // construye con Three.js sin tocar WebGL (se puede crear en Node para las pruebas); el dibujo usa el renderizador
@@ -8,15 +8,18 @@ import { PLAYER_COLORS } from "../core/config";
 import { fitRenderer, projectTo, renderInto } from "../core/three";
 import { clamp, damp } from "./core/math";
 import { Effects } from "./fx/effects";
+import { PowerDropMeshes } from "./fx/powerdrops";
 import { PostFx, type PostState } from "./fx/post";
 import { Weather } from "./fx/weather";
 import { ZombieManager } from "./enemies/manager";
 import { disposeZombieRigs } from "./enemies/model";
 import { Avatar } from "./player/avatar";
 import { disposeWeaponAssets } from "./weapons/model";
+import { disposePlankAssets } from "./world/planks";
 import { WeaponView } from "./weapons/view";
 import { buildMap, type BuiltMap, type LightSource } from "./world/map";
-import { MAP_BOUNDS } from "./world/mapdata";
+import { mapDef } from "./world/maps";
+import type { MapDef, MapId } from "./world/mapdef";
 import { NavGrid } from "./world/nav";
 import { buildSky, MOON_DIR, type Sky } from "./world/sky";
 
@@ -42,6 +45,8 @@ export interface CamState {
   shake: number;
   sprinting: boolean;
   ads: boolean;
+  /** Campo de visión al apuntar con el arma de la mano (por defecto `ADS_FOV`). */
+  adsFov?: number;
   alive: boolean;
   /** 0..1: cuánto se mueve (para el vaivén de la cámara). */
   moving?: number;
@@ -58,6 +63,7 @@ export class DzStage {
   readonly camera: THREE.PerspectiveCamera;
   readonly map: BuiltMap;
   readonly effects: Effects;
+  readonly powerDrops = new PowerDropMeshes();
   readonly zombies: ZombieManager;
   readonly view: WeaponView;
   readonly nav: NavGrid | null;
@@ -88,12 +94,16 @@ export class DzStage {
   private appliedQuality = -1;
   private bob = 0;
 
+  /** El mapa que se ha construido. */
+  readonly def: MapDef;
+
   /** `withNav`: el anfitrión necesita la rejilla de rutas de los zombis; los invitados no. */
-  constructor(withNav: boolean) {
+  constructor(withNav: boolean, mapId: MapId = "sector09") {
+    this.def = mapDef(mapId);
     this.scene.background = new THREE.Color(0x05070b);
     this.scene.fog = new THREE.FogExp2(0x141a25, 0.021);
 
-    this.sky = buildSky();
+    this.sky = buildSky(this.def.sky ?? "city");
     this.scene.add(this.sky.dome, this.sky.skyline);
     this.weather = new Weather({ thunder: (delay) => this.onThunder?.(delay) });
     this.scene.add(this.weather.group);
@@ -140,7 +150,7 @@ export class DzStage {
     this.moon.shadow.normalBias = 0.05;
     this.scene.add(this.moon, this.moon.target);
 
-    this.map = buildMap(this.scene);
+    this.map = buildMap(this.scene, this.def);
     // Grupo fijo de luces puntuales: cada fotograma se reparten entre las fuentes más cercanas.
     for (let i = 0; i < POOL; i++) {
       const light = new THREE.PointLight(0xffffff, 0, 10, 2);
@@ -148,10 +158,11 @@ export class DzStage {
       this.pool.push({ light, src: null, k: 0 });
     }
     this.nav = withNav
-      ? new NavGrid({ minX: MAP_BOUNDS.minX, maxX: MAP_BOUNDS.maxX, minZ: MAP_BOUNDS.minZ, maxZ: MAP_BOUNDS.maxZ }, 0.5, this.map.colliders)
+      ? new NavGrid({ minX: this.def.bounds.minX, maxX: this.def.bounds.maxX, minZ: this.def.bounds.minZ, maxZ: this.def.bounds.maxZ }, 0.5, this.map.colliders)
       : null;
     this.zombies = new ZombieManager(this.scene, this.nav);
     this.effects = new Effects(this.scene);
+    this.scene.add(this.powerDrops.group);
     this.zombies.onDie = (z) => this.effects.corpseBlood(z.position.x, z.position.z);
     for (let i = 0; i < 4; i++) {
       const a = new Avatar(rgb(PLAYER_COLORS[i] ?? PLAYER_COLORS[0]));
@@ -192,7 +203,7 @@ export class DzStage {
       cam.position.set(s.x, damp(cam.position.y, 0.35, 6, dt), s.z);
       cam.rotation.set(-0.25, s.yaw, damp(cam.rotation.z, 0.9, 5, dt));
     }
-    const target = s.ads ? ADS_FOV : s.sprinting ? BASE_FOV + 5 : BASE_FOV;
+    const target = s.ads ? s.adsFov ?? ADS_FOV : s.sprinting ? BASE_FOV + 5 : BASE_FOV;
     if (Math.abs(cam.fov - target) > 0.05) {
       cam.fov = damp(cam.fov, target, 9, dt);
       cam.updateProjectionMatrix();
@@ -357,6 +368,7 @@ export class DzStage {
     this.composer?.dispose();
     this.composer = null;
     this.effects.dispose();
+    this.powerDrops.dispose();
     this.weather.dispose();
     this.sky.dispose();
     this.view.dispose();
@@ -373,5 +385,6 @@ export class DzStage {
     });
     disposeZombieRigs();
     disposeWeaponAssets();
+    disposePlankAssets();
   }
 }

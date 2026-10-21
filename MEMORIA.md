@@ -507,6 +507,93 @@ Portado desde la carpeta hermana `DeadZoneOutbreak` (FPS de un jugador con Vite,
   muros finos, partida quieta que acaba con zombis dentro haciendo daño y ruta por la ventana abierta). Capturas:
   `npm run shot -- test/browser/deadzone.mjs` (las tres últimas son ya una ronda de verdad: llegan, entran y cruzan).
 
+## 6n. Dead Zone: cuatro mapas, selector, tablones al estilo CoD y armas más reales (2026-10-21)
+
+Petición del usuario: mejorar el mapa o, mejor, hacer los mapas principales de Call of Duty (la granja y el pueblo), armas más reales,
+poder pegar/disparar entre las tablas de las ventanas y que la reconstrucción de tablones se vea como en CoD (caen y levitan para colocarse).
+
+- **Mapas como datos** (`world/mapdef.ts`, `world/maps/`): `MapDef` agrupa muros, ventanas y puertas de pago, recintos, suelos, compras, sitios de la
+  caja, mejorador, interruptor, ventajas, props, luces, suelo y horizonte. `buildMap(scene, def)`, `DzStage(withNav, mapId)` y `BuiltMap.def`
+  sustituyen a las constantes globales; `maps/kit.ts` (`Building`, `win`, `door`, `gap`, `wall`, `perimeter`) escribe un edificio en pocas líneas.
+  `MAP_IDS` = granja, pueblo, terminal y sector09 (el original, intacto salvo arreglos).
+- **La Granja** (`granja.ts`): casa de campo (sala con la salida, cocina-dormitorio con el mejorador tras la puerta de 750), granero con gran puerta,
+  silos, tractor, pozo, abrevaderos, heno, árboles y la caseta del generador. Horizonte de colinas con pinos y granjas lejanas.
+- **El Pueblo** (`pueblo.ts`): calle con fuente y torre del reloj, y a ambos lados tienda (salida), bar, banco con cámara acorazada, correos, posada y
+  ferretería; callejones y franja trasera. **La Terminal** (`terminal.ts`): estación con oficina, garaje con portón, gasolinera y aparcamiento con autobuses.
+  Los tres empiezan **dentro** de un edificio (las ventanas importan) y la primera puerta cuesta 500.
+- **Selector**: `new DeadZoneHost(input, n, mode, null)` empieza en el selector (`phase "menu"`, `menuIndex`; flechas/A-D/1-4 y Enter); el HUD dibuja el plano
+  de cada mapa con `drawMenu`. `loadMap(id)` reconstruye escena, rutas e interacciones. Red: `mp` (mapa), `st` (0 selector / 1 partida) y `mi`;
+  el invitado construye la misma escena al recibir `mp` distinto. En el fin de partida, N vuelve al selector.
+- **Texturas nuevas** (`textures.ts`): hierba, tierra, granero (tablas rojas), revestimiento blanco, estuco y adoquín. `world/props2.ts`: heno, silo, tractor, pozo,
+  abrevadero, árbol, sofá, cama, surtidor, expendedora, maletas, taburete, torre del reloj y barrera de hormigón.
+- **Tablones** (`world/planks.ts`, `PlankRig`): al arrancar uno sale despedido hacia la calle, rebota y queda tirado en el suelo; al reparar, el del suelo se eleva
+  flotando con brillo, gira y se lanza a su hueco con un golpe seco (retraso entre varios para el carpintero). Cada pantalla anima desde `planks`.
+- **Entre las tablas**: las balas ya no se detienen en `barricade` (`SHOOT_THROUGH` en `game.ts`), los zombis ven al jugador a través de los tablones y golpean si está pegado, y el
+  cuchillo comprueba la vista (muros y puertas la tapan; ventanas y tablones no).
+- **Armas** (`weapons/detail.ts`): texturas de acero cepillado, polímero granulado, madera con veta, tela y cuero (`applySurfaces`); piezas pequeñas por arma
+  (serraciones, ventanas de expulsión, rieles con ranuras, bocachas ranuradas, cargadores con nervios, cartuchos, cinta de balas, tornillos, mira con orejas,
+  guardamontes…) y manos con dedos, puño, manga y reloj. No mueven nada de la línea de mira (`SIGHTS`).
+- **Arreglos de paso**: `stuck` rescata zombis sin ruta; bus y coche del SECTOR 09 apartados de las compras del subfusil y del revólver; Quick Revive del SECTOR 09 movido.
+- **Pruebas**: `deadzone-maps` (identificadores, ventanas bien orientadas, sitios libres, conectividad con todo abierto y encierro con todo cerrado, en los cuatro mapas),
+  `deadzone-select` (selector, red, tablones y disparo entre tablas) y `deadzone-soak` (500 s con bots en cada mapa). Capturas:
+  `MAPAS=granja,pueblo,terminal npm run shot -- test/browser/deadzone-mapas.mjs`, `deadzone-selector.mjs`, `deadzone-tablones.mjs`, `deadzone-miras.mjs`.
+
+## 6m. Dead Zone: bucle estilo BO2 (revivir, ventajas, bonificaciones, perros, oso), puertas y miras (2026-10-21)
+
+Petición del usuario, en este orden: revivir compañeros → ventajas (Juggernog, Speed Cola, Double Tap, Quick Revive) → bonificaciones →
+perros infernales → oso de la caja; arreglar las puertas de pago, buscar más fallos y rehacer las miras de las armas «como Call of Duty».
+
+- **Puertas**: la hoja giraba sobre su eje con `rotation.y = k * 1.9`, que pisaba la orientación del muro y la dejaba cruzada; ahora se
+  **hunde en el suelo** (`panel.position.y`) y `reset()` ya no toca la rotación. El hueco de `d_pasillo` caía contra el muro sur del
+  Bloque B (se veía un ladrillo en mitad del hueco): se movió a z −11..−9, el muro norte del Pasaje (z −13) se quitó porque es el sur del
+  Bloque B (z −12) y se apartaron el mostrador de la armería y el contenedor del pasaje del paso. Prueba: `test/deadzone-doors.test.ts`
+  (cada puerta, por los dos lados: cartel, compra y cruce).
+- **Zombis atascados** (hallazgo del test largo `deadzone-soak`): uno se quedó para siempre en la ventana exterior de la armería porque no
+  había ruta hasta el jugador (puerta cerrada) y la ronda no acababa. `Zombie.stuckT` cuenta segundos persiguiendo sin avanzar; pasados
+  `STUCK_SECONDS` (12) `DeadZoneHost.rescueZombie` lo coloca en un punto de aparición con ruta hasta un jugador.
+- **Miras** (`SIGHTS` en `weapons/defs.ts`): cada arma declara la altura y el punto por el que mira el ojo; `WeaponView` coloca el modelo
+  para que ese punto caiga en el centro de la pantalla (antes el arma tapaba el centro y el visor del francotirador flotaba).
+  Visores: `Builder.reflex` (marco abierto, cristal y retícula luminosa: punto rojo en el subfusil, holográfica con aro en el R-14 y
+  el pulso), LMG sin asa que tape la línea de mira, y mira telescópica del francotirador con **pantalla de visor** (`drawScope` en `hud.ts`,
+  campo de visión 17°). FOV de apuntar por arma (`CamState.adsFov`) y el punto de mira del HUD se reduce a un píxel al apuntar.
+- **Revivir** (`game.ts`, `game/perks.ts`): con un compañero vivo, quedarse sin vida deja **abatido** 30 s (`Seat.down`); el compañero
+  mantiene E a 1,8 m durante 4 s (2 s con Quick Revive; la barra baja si se suelta). Se pierden las ventajas al caer. Sin compañeros, Quick Revive
+  lo levanta solo a los 4 s (y se gasta). Al acabar la ronda un abatido se levanta donde está; uno desangrado reaparece en la salida con la
+  pistola. La vida se regenera sola pasados 4 s sin daño. Red: `pk` (máscara de ventajas) y `dn` (abatido: segundos, progreso, solo).
+- **Ventajas**: cuatro máquinas pegadas a muros existentes (`world/perkmachines.ts`, sitios en `PERK_SPOTS`): Quick Revive (calle, sin energía),
+  Juggernog (tienda, 2 500), Speed Cola (armería, 3 000) y Double Tap (Bloque B, 2 000); las tres últimas necesitan la energía. Juggernog
+  250 de vida (`Player.maxHealth`), Speed Cola recarga ×0,5 (`WeaponSystem.reloadScale`), Double Tap +33 % cadencia y ×1,5 de daño.
+- **Bonificaciones** (`game/powerups.ts`): además de los seis poderes anteriores, **puntos de bonificación** (100–500 a todos), **liquidación**
+  (la caja cuesta 10 durante 30 s) y **ametralladora** (25 s, solo quien la coge: automática, munición infinita y arma pesada mejorada en las
+  manos; `Seat.deathT`, snapshot `dm`).
+- **Perros infernales**: `ZombieKind "hound"` (rápido, frágil, cabeza adelantada: `ModelDims.headF` y `modelFor`), modelo propio con ojos y boca de brasa
+  y galope (`animateHound`). Rondas 5, 9, 13… (`isDogRound`, `dogTotal`, máx. 10 a la vez): solo perros, llamarada al aparecer (`EV_SPAWNFX`), banner y
+  trueno; el último suelta **munición máxima**. Red: tipo en `ZOMBIE_KINDS`, `rd[5]` marca la ronda de perros.
+- **Oso de la caja**: la caja tiene seis sitios (`BOX_SPOTS`, el 0 es la plaza con su plataforma; los demás sin plataforma) y desde el tercer
+  uso puede dar el oso (`teddyChance`): tras girar se ve un oso 3,6 s, **devuelve los puntos** (`Points.refund`, sin duplicar) y la caja se va a otro
+  sitio con llamaradas. `BuiltMap.moveBox` mueve también la colisión; red: `bx[4]` = sitio, fase 3 = oso.
+- **Pruebas**: `deadzone-doors`, `-perks` (reglas, compra, abatido/revivir, solo, regeneración, red), `-powers` (+ bonificaciones), `-hounds`,
+  `-box` (probabilidad, los seis sitios libres, oso y red) y `-soak` (10 min simulados con dos bots inmortales: sin NaN, sin zombis fuera del
+  mapa ni atascados). Capturas: `npm run shot -- test/browser/deadzone-{puertas,miras,ventajas,perros,oso,poderes}.mjs`.
+
+## 6l. Dead Zone: zombis poroto, poderes y cuchillo (2026-10-21)
+
+Petición del usuario: zombis que salgan más rápido, quitar la lluvia, aspecto del casino con cuello y cabeza distinguibles (más daño a la
+cabeza), poderes de Call of Duty (munición infinita, Katabum, muerte instantánea…) y cuchillo cuando se acaban las balas.
+
+- **Más rápido**: `game/rounds.ts` (14 vivos a la vez +2 por ronda hasta 32, intervalo 0,9 s → mínimo 0,2 s, primera aparición a 1,2 s).
+- **Sin lluvia**: se quitó de `fx/weather.ts` (shader y gotas); quedan ceniza, niebla y relámpagos.
+- **Zombis «poroto»** (`enemies/model.ts`, constante `MODEL`): cuerpo de bean del casino, **cuello oscuro y fino** y **cabeza esférica
+  más clara con ojos y pupilas rojas**. La cabeza es una esfera aparte en el hitscan (`raySphere`, `enemies/manager.ts`); el cuerpo es un
+  cilindro hasta `MODEL.bodyTop`. Multiplicadores de cabeza subidos en `weapons/defs.ts`.
+- **Poderes** (`game/powerups.ts` lógica pura, `fx/powerdrops.ts` dibujo): munición máxima, Katabum (mata a todos), muerte instantánea
+  (25 s), puntos dobles (30 s), munición infinita (25 s) y carpintero (barricadas). Caen de las bajas (6 % con mínimo 6 bajas entre dos; el
+  primero seguro a la 8.ª), duran 28 s en el suelo y los coge quien pasa cerca. Es del equipo, el anfitrión decide. Red: snapshot `pw`
+  (poderes del suelo) y `fx` (segundos de cada efecto) + sucesos `EV_POWER`, `EV_NUKE`, `EV_KNIFE`.
+- **Cuchillo** (`KNIFE` en `weapons/defs.ts`): tecla V siempre, y el clic cuando no queda ni una bala (`WeaponSystem.outOfAmmo`). 150 de
+  daño, cono de 0,7 rad y 2 m, empuja y aturde (`Zombie.knock`). Guest: acción `ca: 6`. HUD avisa «SIN BALAS».
+- **Pruebas**: `test/deadzone-powers.test.ts` (poderes, cuchillo, red y cabeza/cuerpo); capturas `npm run shot -- test/browser/deadzone-poderes.mjs`.
+
 ## 6k. Dead Zone: gráficos, armas, caja del centro y mejorador (2026-10-21)
 
 Petición del usuario: más aspecto de juego de zombis, mejorar las armas, la **caja misteriosa en el centro del mapa donde se pueda
@@ -529,7 +616,7 @@ girar** y un **mejorador de armas como el del mapa Town de Black Ops 2**, «expr
 - **Gráficos**: `stage.ts` (cielo con shader: luna de sangre, nubes, estrellas, relámpagos, ciudad en ruinas; luna con sombras que
   sigue al jugador; mapa de entorno PMREM para reflejos; **grupo fijo de 11 luces** que salta a las fuentes más cercanas de las ~35 del
   mapa), `fx/post.ts` (HDR con MSAA + bloom + «look zombi»: aberración, viñeta, sangre en el borde con poca vida, grano),
-  `fx/weather.ts` (lluvia 100 % en el vertex shader que no cae bajo techo, ceniza y brasas, bancos de niebla, relámpagos y trueno),
+  `fx/weather.ts` (ya sin lluvia, ver §6l: ceniza y brasas, bancos de niebla, relámpagos y trueno),
   `fx/particles.ts` y `fx/effects.ts` (sangre con charcos y salpicaduras, impactos con agujero de bala, casquillos con física,
   humo, cabezas reventadas), `world/batch.ts` (fusiona la geometría estática por material y recalcula las UV **en metros del
   mundo**), `world/textures.ts` (512 px con relieve), `world/decals.ts`/`decor.ts` (sangre, manos, arañazos, pintadas, charcos).

@@ -171,7 +171,8 @@ console.log("Vida y fin de partida");
   host.rounds.alive = 0;
   host.rounds.state = "spawning";
   step(0.2);
-  check(s1.p.alive && s1.reviveSeq === rv + 1, "al acabar la ronda el caído reaparece");
+  // Abatido (no desangrado): al acabar la ronda se levanta donde está; si se hubiese desangrado, reaparecería en la salida.
+  check(s1.p.alive && s1.reviveSeq === rv, "al acabar la ronda el abatido se levanta", `alive ${s1.p.alive} rv ${s1.reviveSeq}/${rv}`);
   // Caen los dos: fin de la partida.
   host.seats[0].p.health = 0;
   s1.p.health = 0;

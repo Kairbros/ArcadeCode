@@ -233,6 +233,61 @@ export class AudioSystem {
     this.tone(1650, 0.18, 0.14, "triangle", 1650, 0.08);
   }
 
+  /** Empieza una ronda de perros: trueno y aullido grave. */
+  houndStart(): void {
+    this.noise(1.8, 0.7, "lowpass", 1800, 0.8);
+    this.tone(60, 1.5, 0.45, "sawtooth", 28);
+    this.tone(220, 1.2, 0.18, "sawtooth", 130, 0.3);
+    this.tone(330, 1.0, 0.14, "triangle", 160, 0.7);
+  }
+
+  /** El oso de la caja: carcajada musical burlona. */
+  teddy(): void {
+    [659, 523, 659, 523, 784, 659, 523].forEach((f, i) => this.tone(f, 0.16, 0.12, "square", f * 0.97, i * 0.14));
+  }
+
+  /** La caja se va a otro sitio: zumbido eléctrico que sube y se apaga. */
+  boxMove(): void {
+    this.tone(180, 0.7, 0.2, "sawtooth", 1400);
+    this.noise(0.8, 0.35, "bandpass", 3000, 1.2);
+    this.tone(1400, 0.4, 0.12, "triangle", 300, 0.55);
+  }
+
+  /** Compañero revivido: acorde cálido ascendente. */
+  revive(): void {
+    [392, 494, 587, 784].forEach((f, i) => this.tone(f, 0.5, 0.12, "triangle", f * 1.02, i * 0.09));
+  }
+
+  /** Tajo del cuchillo: silbido del filo. */
+  melee(): void {
+    this.noise(0.16, 0.22, "bandpass", 2600);
+    this.tone(1400, 0.12, 0.06, "sawtooth", 500);
+  }
+
+  /** Cae un poder: campanilla clara. */
+  powerDrop(): void {
+    this.tone(1568, 0.25, 0.14, "triangle", 1568);
+    this.tone(2093, 0.4, 0.12, "triangle", 2093, 0.14);
+  }
+
+  /** Se recoge un poder: arpegio ascendente. */
+  powerPick(): void {
+    [523, 659, 784, 1047].forEach((f, i) => this.tone(f, 0.22, 0.14, "square", f, i * 0.07));
+  }
+
+  /** El efecto de un poder se acaba. */
+  powerEnd(): void {
+    this.tone(440, 0.4, 0.13, "triangle", 160);
+  }
+
+  /** Katabum: estallido grave con cola de ruido. */
+  nuke(): void {
+    this.noise(1.6, 0.9, "lowpass", 2200, 0.7);
+    this.tone(70, 1.3, 0.5, "sawtooth", 24);
+    this.tone(45, 1.8, 0.45, "sine", 20);
+    this.noise(0.3, 0.4, "highpass", 2500);
+  }
+
   /** Trueno lejano (retumbo largo y grave). */
   thunder(): void {
     this.noise(2.2, 0.5, "lowpass", 160, 0.6);

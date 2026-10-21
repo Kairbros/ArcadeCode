@@ -204,6 +204,18 @@ export function rayCylinder(
   return null;
 }
 
+/** Impacto rayo contra una esfera (la cabeza de los zombis). Devuelve la distancia de entrada o null. */
+export function raySphere(o: Vec3, d: Vec3, center: Vec3, radius: number): number | null {
+  const ox = o.x - center.x, oy = o.y - center.y, oz = o.z - center.z;
+  const b = ox * d.x + oy * d.y + oz * d.z;
+  const c = ox * ox + oy * oy + oz * oz - radius * radius;
+  const disc = b * b - c;
+  if (disc < 0) return null;
+  const t = -b - Math.sqrt(disc);
+  if (t < 0) return c < 0 ? 0 : null;
+  return t;
+}
+
 /** Cápsula vertical aproximada por dos cilindros (torso y cabeza) para los disparos. */
 export function rayCapsule(
   o: Vec3,

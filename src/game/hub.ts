@@ -64,7 +64,7 @@ export function createHostGame(id: GameId, keyboard: Keyboard, remoteCount: numb
   if (id === "blocks" || id === "survival") return new BlocksHost(new BlocksInput(keyboard), remoteCount, "host", id);
   if (id === "pool") return new PoolHost(new PoolInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "casino") return new CasinoHost(new CasinoInput(keyboard), remoteCount, "host");
-  if (id === "deadzone") return new DeadZoneHost(new DeadZoneInput(keyboard), remoteCount, "host");
+  if (id === "deadzone") return new DeadZoneHost(new DeadZoneInput(keyboard), remoteCount, "host", null);
   return new BombermanHost(bothSchemes(keyboard), remoteCount);
 }
 

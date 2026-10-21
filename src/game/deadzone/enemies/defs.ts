@@ -1,7 +1,7 @@
 // Variantes de enemigo y escalado de dificultad. Datos puros, probados con Vitest.
 // Para añadir un tipo nuevo basta con otra entrada en ZOMBIES y un peso en kindWeights.
 
-export type ZombieKind = "walker" | "runner" | "brute";
+export type ZombieKind = "walker" | "runner" | "brute" | "hound";
 
 export interface ZombieDef {
   kind: ZombieKind;
@@ -26,7 +26,7 @@ export interface ZombieDef {
   shirt: number;
 }
 
-export const ZOMBIES: Record<ZombieKind, ZombieDef> = {
+export const ZOMBIES = {
   walker: {
     kind: "walker",
     name: "CAMINANTE",
@@ -75,6 +75,24 @@ export const ZOMBIES: Record<ZombieKind, ZombieDef> = {
     skin: 0x6f7a72,
     shirt: 0x2b3238,
   },
+} as Record<ZombieKind, ZombieDef>;
+
+/** Perro infernal: muy rápido y frágil; solo sale en las rondas de perros (`isDogRound` en rounds.ts). */
+ZOMBIES.hound = {
+  kind: "hound",
+  name: "PERRO INFERNAL",
+  hp: 90,
+  speed: 4.4,
+  damage: 24,
+  attackRange: 1.3,
+  attackCooldown: 0.7,
+  detectRange: 70,
+  points: 60,
+  radius: 0.36,
+  height: 0.95,
+  body: 0x2a1e1a,
+  skin: 0x3a2820,
+  shirt: 0x2a1e1a,
 };
 
 export const ENEMY_SCALING = {

@@ -1,9 +1,10 @@
 // Gestor de enemigos: alta, actualización con separación, impactos por rayo y limpieza.
 import * as THREE from "three";
-import { rayCylinder, type Collider } from "../core/collision";
+import { rayCylinder, raySphere, type Collider } from "../core/collision";
 import type { NavGrid } from "../world/nav";
 import { Zombie, type ZombieState, type ZombieTarget } from "./zombie";
 import type { ZombieKind } from "./defs";
+import { modelFor } from "./model";
 
 export interface ZombieHit {
   zombie: Zombie;
@@ -16,11 +17,16 @@ export interface ManagerHooks {
   /** Un zombi suelta el golpe; `target` es el jugador al que apuntaba. */
   onStrike: (z: Zombie, target: number) => void;
   onGrowl: (z: Zombie) => void;
+  /** Lleva más de `STUCK_SECONDS` sin avanzar lejos de todos: hay que colocarlo en otro sitio. */
+  onStuck?: (z: Zombie) => void;
 }
+
+/** Segundos sin avanzar para dar a un zombi por atascado. */
+export const STUCK_SECONDS = 12;
 
 /** Orden de los estados al viajar por red. */
 export const ZOMBIE_STATES: ZombieState[] = ["spawning", "chasing", "attacking", "hurt", "dying", "dead"];
-export const ZOMBIE_KINDS: ZombieKind[] = ["walker", "runner", "brute"];
+export const ZOMBIE_KINDS: ZombieKind[] = ["walker", "runner", "brute", "hound"];
 
 export class ZombieManager {
   readonly list: Zombie[] = [];
@@ -61,6 +67,10 @@ export class ZombieManager {
         z.pendingStrike = false;
         hooks.onStrike(z, z.strikeTarget);
       }
+      if (z.stuckT > STUCK_SECONDS) {
+        z.stuckT = 0;
+        hooks.onStuck?.(z);
+      }
     }
     // Retirada de cadáveres ya desvanecidos.
     this.poolCleared = 0;
@@ -79,12 +89,17 @@ export class ZombieManager {
     const hits: ZombieHit[] = [];
     for (const z of this.list) {
       if (!z.alive || z.state === "spawning") continue;
+      // Cuerpo: cilindro hasta el tope del cuerpo. Cabeza: esfera aparte sobre el cuello (la bola clara del modelo).
+      const M = modelFor(z.def.kind);
+      const s = z.def.height / M.height;
       const base = new THREE.Vector3(z.position.x, z.position.y, z.position.z);
-      const t = rayCylinder(origin, dir, base, z.radius * 1.15, z.def.height);
+      const body = rayCylinder(origin, dir, base, z.radius * 1.15, (M.bodyTop + 0.06) * s);
+      // La cabeza de los perros va adelantada respecto al cuerpo (hacia donde miran).
+      const center = new THREE.Vector3(z.position.x - Math.sin(z.yaw) * M.headF * s, z.position.y + M.headY * s, z.position.z - Math.cos(z.yaw) * M.headF * s);
+      const skull = z.headless ? null : raySphere(origin, dir, center, M.headR * s * 1.12);
+      const t = skull !== null && (body === null || skull <= body + 0.06) ? skull : body;
       if (t === null || t > maxDist) continue;
-      const y = origin.y + dir.y * t;
-      const head = y > z.position.y + z.def.height * 0.8;
-      hits.push({ zombie: z, t, head, point: origin.clone().addScaledVector(dir, t) });
+      hits.push({ zombie: z, t, head: skull !== null && t === skull, point: origin.clone().addScaledVector(dir, t) });
     }
     hits.sort((a, b) => a.t - b.t);
     return hits;

@@ -201,7 +201,7 @@ console.log("Máquinas con un invitado");
   guest.update(1 / 30);
   const snap = JSON.parse(JSON.stringify(host.frame().snap));
   check(Array.isArray(snap.pr) && snap.pr.length === 4 && snap.pr[1]?.[0] === "CAJA MISTERIOSA" && snap.pr[1][1] === BOX_PRICE, "el estado trae el cartel de cada jugador (el del invitado: la caja)", String(snap.pr[1]?.[0]));
-  check(snap.bx.length === 4 && snap.pu.length === 6 && snap.wp[1].length === 9, "y el de la caja, el del mejorador y las ranuras mejoradas");
+  check(snap.bx.length === 5 && snap.pu.length === 6 && snap.wp[1].length === 9, "y el de la caja, el del mejorador y las ranuras mejoradas");
   const hud = priv(guest).hudView();
   check(hud.prompt?.label === "CAJA MISTERIOSA" && hud.prompt.cost === BOX_PRICE && hud.affordable, "el invitado ve el cartel en su pantalla");
   // El invitado pulsa E: el anfitrión cobra y gira.

@@ -12,8 +12,8 @@ describe("rondas", () => {
       expect(maxAlive(r + 1)).toBeGreaterThanOrEqual(maxAlive(r));
     }
     expect(roundTotal(1)).toBe(7);
-    expect(maxAlive(1)).toBe(10);
-    expect(spawnInterval(1)).toBeGreaterThan(2);
+    expect(maxAlive(1)).toBe(14);
+    expect(spawnInterval(1)).toBeLessThan(1.2); // salen rápido desde la primera ronda
   });
 
   it("la ronda no termina hasta que aparecen todos y mueren todos", () => {

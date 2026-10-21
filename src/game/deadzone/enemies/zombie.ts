@@ -6,7 +6,7 @@ import { clamp, damp, dist2D } from "../core/math";
 import type { Vec3 } from "../core/math";
 import type { NavGrid } from "../world/nav";
 import { scaledDamage, scaledHp, scaledSpeed, ZOMBIES, type ZombieDef, type ZombieKind } from "./defs";
-import { ZOMBIE_VARIANTS, zombieRig } from "./model";
+import { modelFor, ZOMBIE_VARIANTS, zombieRig } from "./model";
 
 export type ZombieState = "spawning" | "chasing" | "attacking" | "hurt" | "dying" | "dead";
 
@@ -27,10 +27,20 @@ export interface ZombieContext {
 
 let zombieSeq = 0;
 
+let houndEyeShared: THREE.MeshBasicMaterial | null = null;
+/** Ojos de los perros infernales: naranja incandescente. */
+function cachedHoundEyeMat(): THREE.MeshBasicMaterial {
+  if (!houndEyeShared) {
+    houndEyeShared = new THREE.MeshBasicMaterial({ toneMapped: false });
+    houndEyeShared.color.setRGB(3.2, 0.8, 0.12);
+  }
+  return houndEyeShared;
+}
+
 let eyeMatShared: THREE.MeshBasicMaterial | null = null;
 /** Ojos rojos incandescentes: un material para todos (el bloom los hace brillar). */
 function cachedEyeMat(): THREE.MeshBasicMaterial {
-  if (!eyeMatShared) eyeMatShared = new THREE.MeshBasicMaterial({ color: 0xff4a1a });
+  if (!eyeMatShared) eyeMatShared = new THREE.MeshBasicMaterial({ color: 0xeef27a });
   return eyeMatShared;
 }
 
@@ -113,9 +123,11 @@ export class Zombie {
     const d = this.def;
     this.group.rotation.order = "YXZ";
     const rig = zombieRig(d.kind, this.variant);
-    const s = d.height / 1.78;
+    const M = modelFor(d.kind);
+    const hound = d.kind === "hound";
+    const s = d.height / M.height;
     this.bodyMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0.02 });
-    const eyeMat = cachedEyeMat();
+    const eyeMat = hound ? cachedHoundEyeMat() : cachedEyeMat();
     const mesh = (geo: THREE.BufferGeometry, mat: THREE.Material = this.bodyMat) => {
       const m = new THREE.Mesh(geo, mat);
       m.castShadow = true;
@@ -127,14 +139,14 @@ export class Zombie {
 
     const head = new THREE.Group();
     head.name = "head";
-    head.position.y = 1.64;
+    head.position.set(0, M.headY, -M.headF);
     head.add(mesh(rig.head));
     this.eyes = mesh(rig.eyes, eyeMat);
     this.eyes.castShadow = false;
     head.add(this.eyes);
     this.group.add(head);
     this.stump = mesh(rig.stump);
-    this.stump.position.set(0, 1.58, 0);
+    this.stump.position.set(0, hound ? M.headY : M.neckY + 0.06, -M.headF);
     this.stump.visible = false;
     this.group.add(this.stump);
 
@@ -145,14 +157,40 @@ export class Zombie {
       pivot.add(mesh(geo));
       this.group.add(pivot);
     };
-    const wide = d.kind === "brute" ? 1.35 : d.kind === "runner" ? 0.9 : 1;
-    limb("lArm", -0.33 * wide, 1.42, rig.lArm);
-    limb("rArm", 0.33 * wide, 1.42, rig.rArm);
-    limb("lLeg", -0.14 * wide, 0.88, rig.lLeg);
-    limb("rLeg", 0.14 * wide, 0.88, rig.rLeg);
+    const armX = d.kind === "brute" ? 0.52 : d.kind === "runner" ? 0.34 : 0.4;
+    const legX = d.kind === "brute" ? 0.22 : d.kind === "runner" ? 0.13 : 0.17;
+    const pivot = (name: string, x: number, y: number, z: number, geo: THREE.BufferGeometry): void => {
+      const p = new THREE.Group();
+      p.name = name;
+      p.position.set(x, y, z);
+      p.add(mesh(geo));
+      this.group.add(p);
+    };
+    if (hound) {
+      // Patas delanteras (en el pecho) y traseras (en la grupa).
+      pivot("lArm", -0.13, M.shoulderY, -0.32, rig.lArm);
+      pivot("rArm", 0.13, M.shoulderY, -0.32, rig.rArm);
+      pivot("lLeg", -0.14, M.hipY, 0.32, rig.lLeg);
+      pivot("rLeg", 0.14, M.hipY, 0.32, rig.rLeg);
+    } else {
+      limb("lArm", -armX, M.shoulderY, rig.lArm);
+      limb("rArm", armX, M.shoulderY, rig.rArm);
+      limb("lLeg", -legX, M.hipY, rig.lLeg);
+      limb("rLeg", legX, M.hipY, rig.rLeg);
+    }
 
     this.group.scale.setScalar(s);
     this.group.position.set(this.position.x, 0, this.position.z);
+  }
+
+  /** Golpe de cuchillo: lo empuja un poco hacia `dir` y lo aturde un instante. */
+  knock(dirX: number, dirZ: number, push = 0.45, stun = 0.7): void {
+    if (!this.alive) return;
+    const len = Math.hypot(dirX, dirZ) || 1;
+    this.position.x += (dirX / len) * push;
+    this.position.z += (dirZ / len) * push;
+    this.stunT = Math.max(this.stunT, stun);
+    this.stagger = Math.max(this.stagger, 0.3);
   }
 
   /** La cabeza vuela: queda el muñón y la mirada se apaga. */
@@ -283,7 +321,8 @@ export class Zombie {
     this.maybeGrowl(dt, ctx);
     const eye = { x: this.position.x, y: this.position.y + 1.5, z: this.position.z };
     const target = { x: playerPos.x, y: playerPos.y + 1.2, z: playerPos.z };
-    const los = hasLineOfSight(eye, target, ctx.colliders);
+    // Los tablones no tapan la vista: un zombi pegado a la ventana golpea al jugador que está justo detrás.
+    const los = hasLineOfSight(eye, target, ctx.colliders, (c) => c.tag === "wall" || c.tag === "prop" || c.tag === "door");
 
     // Ataque: pega si está al alcance y lo ve.
     if (this.attackCd <= 0 && dist <= this.def.attackRange && los && this.state !== "attacking") {
@@ -294,12 +333,13 @@ export class Zombie {
 
     if (this.state === "attacking") {
       // Viento de 0,28 s, golpe, y recuperación (el daño lo aplica el gestor con `strikeNow`).
-      if (this.stateT > 0.28 && !this.struck) {
+      const wind = this.def.kind === "hound" ? 0.16 : 0.28;
+      if (this.stateT > wind && !this.struck) {
         this.struck = true;
         this.pendingStrike = dist <= this.def.attackRange + 0.5;
         this.strikeTarget = this.target;
       }
-      if (this.stateT > 0.55) {
+      if (this.stateT > (this.def.kind === "hound" ? 0.4 : 0.55)) {
         this.state = "chasing";
         this.stateT = 0;
         this.struck = false;
@@ -392,6 +432,33 @@ export class Zombie {
     }
     this.animateWalk(Math.hypot(moveX, moveZ));
     this.state = this.state === "attacking" ? "attacking" : "chasing";
+    // Detector de atascos: cada segundo mide cuánto se ha movido; lejos de su objetivo y casi quieto suma.
+    this.probeT += dt;
+    if (this.probeT >= 1) {
+      const moved = dist2D(this.position.x, this.position.z, this.probeX, this.probeZ);
+      this.stuckT = moved < 0.35 && dist > 2.5 && this.stunT <= 0 ? this.stuckT + this.probeT : 0;
+      this.probeX = this.position.x;
+      this.probeZ = this.position.z;
+      this.probeT = 0;
+    }
+  }
+
+  /** Segundos seguidos persiguiendo sin avanzar (atascado detrás de una puerta cerrada, por ejemplo): el gestor lo rescata. */
+  stuckT = 0;
+  private probeX = 0;
+  private probeZ = 0;
+  private probeT = 0;
+
+  /** Lo coloca en otro punto (rescate de un zombi atascado) y lo hace volver a calcular la ruta. */
+  teleport(x: number, z: number): void {
+    this.position.set(x, 0, z);
+    this.path = [];
+    this.pathIdx = 0;
+    this.repathT = 0;
+    this.stuckT = 0;
+    this.probeX = x;
+    this.probeZ = z;
+    this.probeT = 0;
   }
 
   /** Marca si ya ha soltado el golpe en este ataque. */
@@ -399,7 +466,35 @@ export class Zombie {
   /** El gestor lo lee y lo limpia para aplicar daño. */
   pendingStrike = false;
 
+  /** Galope del perro: patas delanteras y traseras alternas, cuerpo que cabecea y salto al morder. */
+  private animateHound(amount: number): void {
+    const moving = amount > 0.05;
+    const ph = this.swing * (moving ? 2.4 : 1);
+    const amp = moving ? 0.95 : 0.06;
+    const sw = Math.sin(ph);
+    this.limbs.lArm.rotation.x = sw * amp;
+    this.limbs.rArm.rotation.x = Math.sin(ph + 0.45) * amp;
+    this.limbs.lLeg.rotation.x = -Math.sin(ph + 0.9) * amp;
+    this.limbs.rLeg.rotation.x = -Math.sin(ph + 1.35) * amp;
+    this.limbs.head.rotation.x = 0.12 + Math.sin(ph * 2) * 0.05;
+    this.limbs.head.rotation.z = 0;
+    this.group.rotation.x = moving ? -0.05 + Math.sin(ph * 2) * 0.07 : 0.02;
+    this.group.rotation.z = 0;
+    if (this.state === "attacking") {
+      const t = this.stateT;
+      const lunge = t < 0.16 ? -0.3 * (t / 0.16) : 0.35;
+      this.group.rotation.x = lunge;
+      this.limbs.lArm.rotation.x = this.limbs.rArm.rotation.x = t < 0.16 ? 0.6 : -1.2;
+      this.limbs.head.rotation.x = t < 0.16 ? 0.4 : -0.2;
+    }
+    if (this.stagger > 0) this.group.rotation.x -= this.stagger * 1.4;
+  }
+
   private animateWalk(amount: number): void {
+    if (this.def.kind === "hound") {
+      this.animateHound(amount);
+      return;
+    }
     const run = this.def.kind === "runner";
     const amp = amount > 0.05 ? (run ? 1.0 : 0.8) : 0.1;
     const swing = Math.sin(this.swing * 1.6);
@@ -431,6 +526,10 @@ export class Zombie {
   private animateSpawn(): void {
     const k = clamp(this.stateT / 0.9, 0, 1);
     this.group.position.y = -0.9 * (1 - k);
+    if (this.def.kind === "hound") {
+      this.group.rotation.x = (1 - k) * 0.5;
+      return;
+    }
     this.group.rotation.x = (1 - k) * 0.5;
     this.limbs.lArm.rotation.x = 2.1 * (1 - k) + 1.1 * k;
     this.limbs.rArm.rotation.x = 1.8 * (1 - k) + 1.0 * k;
@@ -438,6 +537,22 @@ export class Zombie {
 
   private animateDeath(): void {
     const k = clamp(this.stateT / 0.55, 0, 1);
+    if (this.def.kind === "hound") {
+      // El perro cae de costado con las patas estiradas.
+      this.group.rotation.x = 0;
+      this.group.rotation.z = this.fallDir * k * Math.PI * 0.46;
+      this.limbs.lArm.rotation.x = -0.6 * k;
+      this.limbs.rArm.rotation.x = -0.9 * k;
+      this.limbs.lLeg.rotation.x = 0.7 * k;
+      this.limbs.rLeg.rotation.x = 0.5 * k;
+      if (this.stateT > 1.5) {
+        const fade = clamp((this.stateT - 1.5) / 1.0, 0, 1);
+        this.bodyMat.transparent = true;
+        this.bodyMat.opacity = 1 - fade;
+        this.sink = -fade * 1.0;
+      }
+      return;
+    }
     // Cae hacia atrás (o de bruces) con una ligera torsión y los brazos sueltos.
     this.group.rotation.x = this.fallDir * k * Math.PI * 0.49;
     this.group.rotation.z = Math.sin(k * Math.PI) * 0.25 * this.fallDir;

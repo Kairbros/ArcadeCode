@@ -172,3 +172,79 @@ export function buildDecorations(root: THREE.Object3D, dyn: THREE.Object3D, anim
     });
   });
 }
+
+// --- Decoración por datos (para los mapas nuevos) ---------------------------------------------------------------
+
+export interface DecorSpec {
+  seed: number;
+  texts: { x: number; z: number; nx: number; nz: number; y: number; text: string; color: string; w: number; arrow?: "left" | "right" }[];
+  hands: [number, number, number, number, number][];
+  claws: [number, number, number, number, number][];
+  /** Zonas donde hay charcos de sangre (recintos y calles) y cuántos. */
+  blood: { x0: number; z0: number; x1: number; z1: number }[];
+  bloodCount: number;
+  trails: [number, number, number, number][];
+  /** Charcos de agua o barro que reflejan el cielo. */
+  puddles: [number, number, number][];
+  /** Zona por la que vuelan los papeles. */
+  papers: { x0: number; z0: number; x1: number; z1: number };
+}
+
+/** Pintadas, manos, arañazos, sangre, charcos y papeles según un `DecorSpec`. */
+export function buildSpecDecor(root: THREE.Object3D, dyn: THREE.Object3D, animated: ((dt: number, time: number) => void)[], spec: DecorSpec): void {
+  const r = seeded(spec.seed);
+  for (const t of spec.texts) wallDecal(root, t.x, t.z, t.nx, t.nz, t.y, `txt${t.text}${t.color}`, graffitiTexture(t.text, t.color, t.arrow ?? ""), t.w, t.w / 4);
+  const hand = handTexture();
+  const claw = clawTexture();
+  for (const [x, z, nx, nz, y] of spec.hands) wallDecal(root, x, z, nx, nz, y, "hand", hand, 0.5, 0.5, (r() - 0.5) * 0.5);
+  for (const [x, z, nx, nz, y] of spec.claws) wallDecal(root, x, z, nx, nz, y, "claw", claw, 0.8, 0.8, (r() - 0.5) * 0.4);
+  const area = spec.blood.map((q) => (q.x1 - q.x0) * (q.z1 - q.z0));
+  const total = area.reduce((a, b) => a + b, 0) || 1;
+  for (let i = 0; i < spec.bloodCount; i++) {
+    let pick = r() * total;
+    let k = 0;
+    while (k < spec.blood.length - 1 && pick > area[k]) pick -= area[k++];
+    const q = spec.blood[k];
+    floorDecal(root, q.x0 + 0.8 + r() * Math.max(0.1, q.x1 - q.x0 - 1.6), q.z0 + 0.8 + r() * Math.max(0.1, q.z1 - q.z0 - 1.6), 0.8 + r() * 2.0, Math.floor(r() * 4), r() * 6.28);
+  }
+  for (const [x0, z0, x1, z1] of spec.trails) {
+    const n = 9;
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1);
+      floorDecal(root, x0 + (x1 - x0) * t + (r() - 0.5) * 0.5, z0 + (z1 - z0) * t + (r() - 0.5) * 0.5, 0.45 + r() * 0.5 + (1 - t) * 0.4, Math.floor(r() * 4), r() * 6.28);
+    }
+  }
+  const puddleMat = new THREE.MeshStandardMaterial({ color: 0x06090d, roughness: 0.02, metalness: 0.15, transparent: true, opacity: 0.78, alphaMap: puddleTexture(), envMapIntensity: 2.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+  for (const [x, z, sz] of spec.puddles) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(sz * 1.4, sz), puddleMat);
+    m.rotation.set(-Math.PI / 2, 0, r() * 3.14);
+    m.position.set(x, 0.028, z);
+    root.add(m);
+  }
+  const p = spec.papers;
+  const paperMat = new THREE.MeshBasicMaterial({ color: 0xb8b09c, side: THREE.DoubleSide });
+  const papers: THREE.Mesh[] = [];
+  for (let i = 0; i < 12; i++) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.2), paperMat);
+    m.position.set(p.x0 + r() * (p.x1 - p.x0), 0.05, p.z0 + r() * (p.z1 - p.z0));
+    m.rotation.set(-Math.PI / 2, 0, r() * 6.28);
+    dyn.add(m);
+    papers.push(m);
+  }
+  animated.push((dt, time) => {
+    papers.forEach((m, i) => {
+      const gust = Math.max(0, Math.sin(time * 0.35 + i * 1.3) - 0.8) * 5;
+      if (gust > 0) {
+        m.position.x += gust * dt * 2.2;
+        m.position.z += Math.sin(time * 3 + i) * gust * dt;
+        m.position.y = 0.05 + gust * 0.12 + Math.abs(Math.sin(time * 5 + i)) * gust * 0.08;
+        m.rotation.z += dt * gust * 4;
+        m.rotation.x = -Math.PI / 2 + Math.sin(time * 7 + i) * 0.5 * gust;
+        if (m.position.x > p.x1) m.position.x = p.x0;
+      } else {
+        m.position.y = Math.max(0.03, m.position.y - dt * 0.4);
+        m.rotation.x += (-Math.PI / 2 - m.rotation.x) * Math.min(1, dt * 4);
+      }
+    });
+  });
+}

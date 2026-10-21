@@ -15,6 +15,12 @@ export const TILE_M: Record<string, number> = {
   wood: 1.6,
   tile: 2.0,
   rust: 2.4,
+  grass: 5.0,
+  dirt: 4.0,
+  barn: 2.4,
+  siding: 2.2,
+  plaster: 3.0,
+  cobble: 3.0,
 };
 
 function seeded(seed: number): () => number {
@@ -341,6 +347,119 @@ const build: Record<string, () => THREE.Texture> = {
     noise(g, r, 0.18);
     return finish(c);
   },
+  grass: () => {
+    const r = seeded(101);
+    const { c, g } = makeCanvas();
+    g.fillStyle = "#3e4a28";
+    g.fillRect(0, 0, S, S);
+    blobs(g, r, 60, "rgba(86,96,44,0.45)", 20, 90);
+    blobs(g, r, 40, "rgba(24,32,16,0.4)", 20, 80);
+    blobs(g, r, 14, "rgba(96,76,44,0.45)", 12, 40); // calvas de tierra
+    // Briznas.
+    for (let i = 0; i < 2600; i++) {
+      const x = r() * S;
+      const y = r() * S;
+      const l = 4 + r() * 8;
+      g.strokeStyle = `rgba(${60 + r() * 60},${80 + r() * 60},${24 + r() * 30},${0.25 + r() * 0.45})`;
+      g.lineWidth = 0.8 + r() * 0.8;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x + (r() - 0.5) * 4, y - l);
+      g.stroke();
+    }
+    blobs(g, r, 4, "rgba(80,10,10,0.28)", 14, 40);
+    noise(g, r, 0.2);
+    return finish(c);
+  },
+  dirt: () => {
+    const r = seeded(103);
+    const { c, g } = makeCanvas();
+    g.fillStyle = "#5a4630";
+    g.fillRect(0, 0, S, S);
+    blobs(g, r, 50, "rgba(120,92,58,0.4)", 20, 100);
+    blobs(g, r, 40, "rgba(34,24,16,0.45)", 16, 80);
+    // Huellas de rueda y piedrecitas.
+    for (const x of [S * 0.3, S * 0.7]) {
+      g.fillStyle = "rgba(24,16,10,0.4)";
+      g.fillRect(x - 12, 0, 24, S);
+    }
+    for (let i = 0; i < 380; i++) {
+      const v = 100 + r() * 80;
+      g.fillStyle = `rgba(${v},${v - 10},${v - 26},${0.3 + r() * 0.4})`;
+      g.beginPath();
+      g.arc(r() * S, r() * S, 0.8 + r() * 2.6, 0, Math.PI * 2);
+      g.fill();
+    }
+    cracks(g, r, 5, 0.8);
+    noise(g, r, 0.24);
+    return finish(c);
+  },
+  barn: () => {
+    const r = seeded(107);
+    const { c, g } = makeCanvas();
+    boards(g, r, [128, 36, 28], 12, "rgba(220,214,200,0.9)");
+    blobs(g, r, 30, "rgba(30,16,10,0.34)", 20, 90);
+    drips(g, r, 18, "20,10,6", 240);
+    cracks(g, r, 4, 0.6);
+    noise(g, r, 0.2);
+    return finish(c);
+  },
+  siding: () => {
+    const r = seeded(109);
+    const { c, g } = makeCanvas();
+    boards(g, r, [176, 170, 156], 14, "rgba(90,84,74,0.9)");
+    blobs(g, r, 26, "rgba(60,54,40,0.3)", 20, 90);
+    drips(g, r, 22, "40,34,22", 260);
+    // Salpicaduras de sangre seca.
+    blobs(g, r, 5, "rgba(86,10,10,0.42)", 10, 40);
+    noise(g, r, 0.2);
+    return finish(c);
+  },
+  plaster: () => {
+    const r = seeded(113);
+    const { c, g } = makeCanvas();
+    g.fillStyle = "#a79c86";
+    g.fillRect(0, 0, S, S);
+    blobs(g, r, 40, "rgba(190,178,150,0.4)", 30, 110);
+    blobs(g, r, 30, "rgba(70,60,44,0.3)", 20, 80);
+    // Desconchones que dejan ver el ladrillo.
+    for (let i = 0; i < 5; i++) {
+      const x = r() * S;
+      const y = r() * S;
+      g.fillStyle = "rgba(86,64,52,0.7)";
+      g.beginPath();
+      g.ellipse(x, y, 10 + r() * 26, 8 + r() * 18, r() * 3, 0, Math.PI * 2);
+      g.fill();
+    }
+    drips(g, r, 24, "30,24,16", 260);
+    cracks(g, r, 8, 1.2);
+    noise(g, r, 0.22);
+    return finish(c);
+  },
+  cobble: () => {
+    const r = seeded(127);
+    const { c, g } = makeCanvas();
+    g.fillStyle = "#26231f";
+    g.fillRect(0, 0, S, S);
+    const t = 42;
+    for (let row = 0; row * t < S + t; row++) {
+      for (let col = -1; col * t < S + t; col++) {
+        const x = col * t + (row % 2 ? t / 2 : 0) + (r() - 0.5) * 4;
+        const y = row * t + (r() - 0.5) * 4;
+        const v = 84 + r() * 54;
+        g.fillStyle = `rgb(${v},${v - 2},${v - 8})`;
+        g.beginPath();
+        g.ellipse(x + t / 2, y + t / 2, t / 2 - 3, t / 2 - 4, 0, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = "rgba(255,255,255,0.07)";
+        g.fillRect(x + 8, y + 7, t - 18, 2);
+      }
+    }
+    blobs(g, r, 14, "rgba(18,16,12,0.45)", 20, 70);
+    blobs(g, r, 5, "rgba(80,10,10,0.3)", 12, 40);
+    noise(g, r, 0.2);
+    return finish(c);
+  },
   rust: () => {
     const r = seeded(79);
     const { c, g } = makeCanvas();
@@ -358,6 +477,33 @@ const build: Record<string, () => THREE.Texture> = {
     return finish(c);
   },
 };
+
+/** Tablas pintadas en horizontal (granero rojo, casa blanca): las juntas, la pintura desconchada y la veta. */
+function boards(g: G, r: R, base: [number, number, number], count: number, trim: string): void {
+  const h = S / count;
+  for (let i = 0; i < count; i++) {
+    const k = 0.82 + r() * 0.3;
+    g.fillStyle = `rgb(${Math.round(base[0] * k)},${Math.round(base[1] * k)},${Math.round(base[2] * k)})`;
+    g.fillRect(0, i * h, S, h);
+    // Veta de la madera.
+    for (let j = 0; j < 6; j++) {
+      g.strokeStyle = `rgba(20,12,8,${0.05 + r() * 0.12})`;
+      g.lineWidth = 0.6 + r();
+      const y = i * h + 2 + r() * (h - 4);
+      g.beginPath();
+      g.moveTo(0, y);
+      g.lineTo(S, y + (r() - 0.5) * 3);
+      g.stroke();
+    }
+    g.fillStyle = "rgba(10,6,4,0.7)";
+    g.fillRect(0, i * h, S, 2.2);
+    g.fillStyle = "rgba(255,255,255,0.07)";
+    g.fillRect(0, i * h + 2.2, S, 1.2);
+  }
+  // Remates verticales de las tablas en alternancia.
+  g.fillStyle = trim;
+  for (let x = 0; x < S; x += S / 2) g.fillRect(x, 0, 4, S);
+}
 
 export type TextureName = keyof typeof build;
 
