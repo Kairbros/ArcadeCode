@@ -54,16 +54,64 @@ export const ITEM_NONE = 0;
 export const ITEM_TURBO = 1;
 export const ITEM_BANANA = 2;
 export const ITEM_SHELL = 3;
-export type ItemKind = 0 | 1 | 2 | 3;
-export const ITEM_NAMES = ["", "Turbo", "Plátano", "Proyectil"];
+/** Caparazón rojo: persigue al kart que va justo por delante. */
+export const ITEM_RED = 4;
+/** Estrella: invencible y rápido unos segundos. */
+export const ITEM_STAR = 5;
+/** Bomba TNT: se suelta atrás y explota por contacto o a los pocos segundos. */
+export const ITEM_BOMB = 6;
+/** Rayo: frena un rato a todos los que van por delante. */
+export const ITEM_BOLT = 7;
+export type ItemKind = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export const ITEM_NAMES = ["", "Turbo", "Plátano", "Proyectil", "Proyectil teledirigido", "Estrella", "Bomba TNT", "Rayo"];
 
 export const TURBO_TIME = 1.4;
 export const TURBO_SPEED = 265;
 export const SPIN_TIME = 1.1;
 export const SHELL_SPEED = 320;
 export const SHELL_LIFE = 3;
+export const RED_LIFE = 6;
+export const RED_TURN = 3.2; // rad/s
 export const BOX_RESPAWN = 3;
 export const MAX_BANANAS = 12;
+export const STAR_TIME = 6;
+export const STAR_SPEED = 235;
+export const BOMB_FUSE = 2.8;
+export const BOMB_RADIUS = 30;
+export const MAX_BOMBS = 6;
+export const BLAST_TIME = 0.6;
+export const BOLT_TIME = 4;
+export const BOLT_FACTOR = 0.6; // velocidad máxima de quien recibe el rayo
+
+// --- Rampas, salto y trucos ---
+export const GRAVITY = 210; // unidades/s²
+export const RAMP_LEN = 5; // puntos de línea central que mide la rampa
+export const RAMP_LAUNCH = 88; // velocidad vertical al saltar a tope de velocidad
+export const RAMP_MIN_SPEED = 60;
+export const AIR_STEER = 0.3; // fracción del giro que se conserva en el aire
+export const TRICK_BOOST = 0.9; // segundos de turbo al aterrizar tras un truco
+
+// --- Zonas de turbo y monedas ---
+export const PAD_R = 13; // radio de una placa de turbo
+export const PAD_TIME = 1.1;
+export const COIN_R = 10;
+export const MAX_COINS = 10;
+export const COIN_SPEED = 2.4; // velocidad máxima extra por moneda
+
+// --- Vacío del espacio (Lakitu) ---
+/** Al caer por debajo de esta altura (unidades) Lakitu recoge al kart y lo devuelve a la pista. */
+export const FALL_LIMIT = -140;
+export const DROP_TIME = 1.3; // segundos que se ve a Lakitu con la nube
+export const RESPAWN_BACK = 8; // puntos de línea central hacia atrás del último tramo seguro
+export const CHOMP_R = 11;
+/** Semiancho de la cinta del espacio y distancia a la que se empieza a caer (un poco más que el asfalto). */
+export const RIBBON_HW = TRACK_W / 2 + 18;
+export const FALL_DIST = TRACK_W / 2 + 16;
+
+// --- Túneles (cuevas) ---
+/** Dentro del túnel la pared está a esta distancia de la línea central (más cerca que fuera). */
+export const TUNNEL_LIMIT = TRACK_W / 2 + 3.3; // justo dentro del borde del asfalto (no cuenta como fuera de pista)
+export const TUNNEL_R = TRACK_W / 2 + 14; // radio del arco de roca
 
 // --- Carrera ---
 export const RACERS = 4; // los huecos sin jugador los ocupa la IA

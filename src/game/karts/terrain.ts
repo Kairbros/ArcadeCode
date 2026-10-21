@@ -32,7 +32,7 @@ export function terrainOf(track: Track): Terrain {
   // Ondulaciones: tres ondas largas en direcciones al azar (pendientes de hasta ~20°).
   const waves = ([[950, 20], [620, 13], [400, 7]] as const).map(([len, amp]) => {
     const dir = rng.next() * Math.PI * 2;
-    return { kx: (Math.cos(dir) * Math.PI * 2) / len, ky: (Math.sin(dir) * Math.PI * 2) / len, amp, ph: rng.next() * Math.PI * 2 };
+    return { kx: (Math.cos(dir) * Math.PI * 2) / len, ky: (Math.sin(dir) * Math.PI * 2) / len, amp: amp * track.theme.relief, ph: rng.next() * Math.PI * 2 };
   });
   const base = (x: number, y: number) => waves.reduce((s, w) => s + w.amp * Math.sin(x * w.kx + y * w.ky + w.ph), 0);
   // Colinas repartidas por el mapa (solo cuentan lejos de la pista).
@@ -72,7 +72,8 @@ export function terrainOf(track: Track): Terrain {
         }
       }
       const d = Math.sqrt(best);
-      const w = smooth(near, far, d);
+      // En el espacio no hay terreno: el plano de alturas es el de la pista más cercana.
+      const w = track.theme.void ? 0 : smooth(near, far, d);
       const v = along[bk] * (1 - w) + (base(x, y) + hills(x, y) * smooth(near, near + 260, d)) * w;
       h[j * (seg + 1) + i] = v;
       min = Math.min(min, v);

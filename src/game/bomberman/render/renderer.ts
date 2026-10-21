@@ -10,7 +10,7 @@ import type { Entity, World } from "../ecs";
 import { Rng } from "../../core/rng";
 import { settings } from "../../core/settings";
 import {
-  css, fillCircle, fillEllipse, fillRect, line, roundRect, shade, strokeCircle, strokeEllipse, strokeRect,
+  css, fillCircle, fillEllipse, fillRect, line, roundRect, shade, strokeEllipse, strokeRect,
   text, titleText, type Ctx,
 } from "../../core/draw";
 import { drawIcon } from "./icons";
@@ -195,26 +195,32 @@ export class Renderer {
     const rad = TILE * 0.36 * scale;
     const cy = y - bob;
     fillEllipse(ctx, x - rad, y + rad * 0.65, rad * 2, rad * 0.6, "rgba(0,0,0,0.45)");
-    // antena
-    line(ctx, x, cy - rad, x, cy - rad * 1.45, [40, 40, 40], 2);
-    fillCircle(ctx, x, cy - rad * 1.5, Math.max(2, rad * 0.2), [255, 110, 170]);
-    // cuerpo + cara
-    fillCircle(ctx, x, cy, rad, color);
-    strokeCircle(ctx, x, cy, rad, shade(color, 0.6), 2);
+    // Poroto del casino: piececitos, cuerpo de cápsula, guantes, ojos saltones, nariz y bombín.
+    const dark: RGB = [42, 14, 28], cream: RGB = [255, 244, 222];
     const [fx, fy] = mov.facing;
-    const faceX = x + fx * rad * 0.2;
-    const faceY = cy + fy * rad * 0.2;
-    fillCircle(ctx, faceX, faceY, rad * 0.62, [255, 222, 185]);
+    const step = mov.moving ? Math.sin(this.time * 14) * rad * 0.25 : 0;
+    for (const side of [-1, 1]) fillEllipse(ctx, x + side * rad * 0.42 - rad * 0.3, cy + rad * 0.78 + step * side, rad * 0.6, rad * 0.4, dark);
+    roundRect(ctx, x - rad * 0.85, cy - rad * 0.85, rad * 1.7, rad * 1.85, rad * 0.85, color, shade(color, 0.6), 2);
     for (const side of [-1, 1]) {
-      const ex = faceX + (fx === 0 ? side * rad * 0.24 : fx * rad * 0.18 + side * rad * 0.12);
-      const ey = faceY - rad * 0.05 + fy * rad * 0.12;
-      fillCircle(ctx, ex, ey, Math.max(1, rad * 0.1), [20, 20, 30]);
+      fillCircle(ctx, x + side * rad * 1.02, cy + rad * 0.2 - step * side * 0.6, rad * 0.26, cream);
     }
+    const faceX = x + fx * rad * 0.12;
+    const faceY = cy - rad * 0.3 + fy * rad * 0.1;
+    for (const side of [-1, 1]) {
+      const ex = faceX + side * rad * 0.31;
+      fillEllipse(ctx, ex - rad * 0.24, faceY - rad * 0.3, rad * 0.48, rad * 0.6, [255, 255, 255]);
+      fillCircle(ctx, ex + fx * rad * 0.1, faceY + fy * rad * 0.12, Math.max(1, rad * 0.12), [20, 16, 24]);
+    }
+    fillCircle(ctx, faceX, faceY + rad * 0.42, Math.max(1, rad * 0.13), [255, 122, 138]);
+    // Bombín oscuro con cinta clara.
+    fillEllipse(ctx, x - rad * 0.95, cy - rad * 1.0, rad * 1.9, rad * 0.4, dark);
+    roundRect(ctx, x - rad * 0.55, cy - rad * 1.5, rad * 1.1, rad * 0.7, rad * 0.3, dark);
+    fillRect(ctx, x - rad * 0.55, cy - rad * 0.95, rad * 1.1, Math.max(1, rad * 0.12), cream);
     // En escala de grises los colores no distinguen a los jugadores: se muestra su número.
     const player = world.get(e, Player);
     if (settings.grayscale && player && !dying) {
       const label = String(player.index + 1);
-      const ly = cy - rad * 1.5 - 13;
+      const ly = cy - rad * 1.5 - 8;
       titleText(ctx, label, x, ly, [255, 255, 255], "16px", "center", "middle");
     }
   }

@@ -5,6 +5,7 @@ import {
 } from "../config";
 import type { Entity, World } from "../ecs";
 import { badge, fillRect, fitText, fitTitle, line, panel, shadowText, text, textWidth, titleText, type Ctx } from "../../core/draw";
+import { C_ACCENT, C_BG, C_GOLD } from "../../core/theme";
 import { drawIcon } from "./icons";
 
 const FONT = "bold 16px Arial, sans-serif";
@@ -19,10 +20,8 @@ const COMPACT = { width: 142, nameFont: SMALL, statFont: SMALL, icon: 16, step: 
 export class Hud {
   draw(ctx: Ctx, world: World, playerIds: Entity[], enemiesLeft: number, localIndex: number | null) {
     fillRect(ctx, 0, 0, SCREEN_W, HUD_HEIGHT, HUD_BG);
-    // Filete de neón bajo el marcador, a trozos como en las recreativas.
-    ctx.fillStyle = "rgb(255,61,139)";
-    for (let x = 0; x < SCREEN_W; x += 16) ctx.fillRect(x, HUD_HEIGHT - 4, 10, 3);
-    line(ctx, 0, HUD_HEIGHT - 1, SCREEN_W, HUD_HEIGHT - 1, HUD_LINE, 2);
+    // Filo naranja bajo el marcador, como la franja de arriba del casino.
+    line(ctx, 0, HUD_HEIGHT - 2, SCREEN_W, HUD_HEIGHT - 2, C_ACCENT, 3);
 
     const layout = playerIds.length > 2 ? COMPACT : WIDE;
     playerIds.forEach((e, i) => this.playerPanel(ctx, world, e, i, 8 + i * layout.width, layout, i === localIndex));
@@ -38,7 +37,7 @@ export class Hud {
     const color = PLAYER_COLORS[i];
     const cy = HUD_HEIGHT / 2 - 2;
     const r = layout === WIDE ? 11 : 9;
-    panel(ctx, x - 4, 3, layout.width - 6, HUD_HEIGHT - 10, isLocal ? color : HUD_LINE, isLocal ? 0.5 : 0.35, [0, 0, 0], 2);
+    panel(ctx, x - 4, 3, layout.width - 6, HUD_HEIGHT - 10, isLocal ? color : HUD_LINE, isLocal ? 0.7 : 0.55, C_BG, 2);
     // Número del jugador: identifica también en escala de grises.
     badge(ctx, x + r + 2, cy, r, color, String(i + 1));
     const player = world.get(e, Player);
@@ -68,13 +67,13 @@ export class Hud {
   /** Etiqueta discreta del tipo de conexión, en la esquina inferior derecha del mapa. */
   drawNetLabel(ctx: Ctx, label: string) {
     const w = textWidth(ctx, label, SMALL) + 14;
-    panel(ctx, SCREEN_W - w - 6, SCREEN_H - 27, w, 22, HUD_LINE, 0.55, [0, 0, 0], 2);
+    panel(ctx, SCREEN_W - w - 6, SCREEN_H - 27, w, 22, HUD_LINE, 0.55, C_BG, 2);
     text(ctx, label, SCREEN_W - 13, SCREEN_H - 16, TEXT_DIM, SMALL, "right", "middle");
   }
 
   drawHint(ctx: Ctx, hint: string, alpha: number) {
     ctx.globalAlpha = alpha;
-    panel(ctx, -4, SCREEN_H - 32, SCREEN_W + 8, 28, [255, 207, 80], 0.7, [0, 0, 0], 2);
+    panel(ctx, -4, SCREEN_H - 32, SCREEN_W + 8, 28, C_GOLD, 0.7, C_BG, 2);
     shadowText(ctx, fitText(ctx, hint, SCREEN_W - 16, SMALL), SCREEN_W / 2, SCREEN_H - 18, TEXT_COLOR, SMALL, "center", "middle");
     ctx.globalAlpha = 1;
   }
@@ -83,7 +82,7 @@ export class Hud {
     ctx.fillStyle = "rgba(0,0,0,0.6)";
     ctx.fillRect(0, HUD_HEIGHT, SCREEN_W, SCREEN_H - HUD_HEIGHT);
     const midY = HUD_HEIGHT + (SCREEN_H - HUD_HEIGHT) / 2;
-    panel(ctx, -4, midY - 62, SCREEN_W + 8, 120, color, 0.55, [0, 0, 0], 3);
+    panel(ctx, -4, midY - 62, SCREEN_W + 8, 120, color, 0.8, C_BG, 3);
     titleText(ctx, fitTitle(ctx, title, SCREEN_W - 24, BIG), SCREEN_W / 2, midY - 20, color, BIG, "center", "middle");
     // El subtítulo parpadea como un "PULSA START".
     const lit = Math.floor(performance.now() / 500) % 2 === 0;

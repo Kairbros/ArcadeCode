@@ -1,6 +1,7 @@
 // Modelos 3D de la escena, hechos con cajas (estilo de bloques) y la luz y sombras de Three.js.
 // Unidades: metros; la mesa es cuadrada, de 2 × 2, con el tablero en y = 0. Los personajes y objetos
 // de cada asiento miran hacia -z (hacia el centro de la mesa); la escopeta apunta con el cañón hacia -z.
+import { buildBean } from "../core/bean";
 import * as THREE from "three";
 import {
   I_ADRENALINE, I_BEER, I_CIGS, I_CUFFS, I_INVERTER, I_LUPA, I_MEDS, I_PHONE, I_SAW,
@@ -331,14 +332,6 @@ function legs(p: ReturnType<typeof palette>, pants: number): THREE.Group {
   return g;
 }
 
-function hand(skin: THREE.Material, scale: number): THREE.Group {
-  const g = group(box([0.075, 0.028, 0.08], skin));
-  [0.05, 0.056, 0.05, 0.042].forEach((l, i) => g.add(box([0.016, 0.022, l], skin, [(i - 1.5) * 0.019, -0.002, -0.04 - l / 2])));
-  g.add(box([0.018, 0.02, 0.04], skin, [0.045, -0.002, -0.01], [0, -0.5, 0]));
-  g.scale.setScalar(scale);
-  return g;
-}
-
 /** Monta el personaje: cuerpo que se inclina en la cintura, piernas fijas y mano de muestra. */
 function assemble(body: THREE.Group, lower: THREE.Group, scale: number) {
   body.scale.setScalar(scale);
@@ -350,76 +343,28 @@ function assemble(body: THREE.Group, lower: THREE.Group, scale: number) {
   return { root: group(lower, upper), upper };
 }
 
-/** El crupier: alto, traje oscuro, cara pálida y huesuda, cuencas negras con ojos que brillan y dientes. */
-export function buildDealer(): Character {
+/**
+ * Poroto del casino sentado a la mesa (sin piernas ni brazos propios: el render estira los brazos).
+ * `croupier`: el botones amarillo con esmoquin y fez, más grande, que reparte.
+ */
+function seated(color: number, croupier: boolean, scale: number): Character {
   const p = palette();
-  const coat = p.std(0x1d1b20, 0.9), lapel = p.std(0x141216, 0.8), shirt = p.std(0xb8b2a4);
-  const tie = p.std(0x5c1014, 0.7), skin = p.std(0xc9c2b2, 0.7), skinDark = p.std(0x8f887a, 0.8);
-  const black = p.std(0x0a0808, 1), teeth = p.std(0xe6dcc0, 0.4), eye = p.glow(0xfff8e0);
-  const eyes: V3[] = [[-0.065, 0.945, -0.156], [0.065, 0.945, -0.156]];
-  const body = group(
-    box([0.58, 0.6, 0.3], coat, [0, 0.32, 0.02]),
-    box([0.68, 0.1, 0.32], coat, [0, 0.6, 0.02]),
-    box([0.14, 0.36, 0.012], shirt, [0, 0.42, -0.135]),
-    box([0.05, 0.26, 0.008], tie, [0, 0.43, -0.144]),
-    box([0.06, 0.04, 0.014], tie, [0, 0.575, -0.145]),
-    box([0.07, 0.26, 0.01], lapel, [-0.08, 0.47, -0.142], [0, 0, 0.22]),
-    box([0.07, 0.26, 0.01], lapel, [0.08, 0.47, -0.142], [0, 0, -0.22]),
-    box([0.1, 0.14, 0.1], skin, [0, 0.69, 0]),
-    // Cabeza alargada con la mandíbula más estrecha
-    box([0.27, 0.3, 0.27], skin, [0, 0.96, -0.01]),
-    box([0.21, 0.08, 0.22], skin, [0, 0.775, -0.025]),
-    box([0.25, 0.03, 0.25], skinDark, [0, 1.12, -0.01]),
-    box([0.28, 0.035, 0.03], skinDark, [0, 1.0, -0.148]),
-    box([0.16, 0.006, 0.006], skinDark, [0, 1.05, -0.146], [0, 0, 0], false),
-    box([0.12, 0.006, 0.006], skinDark, [0, 1.07, -0.146], [0, 0, 0], false),
-    ...[-1, 1].flatMap((s) => [
-      box([0.05, 0.09, 0.012], skinDark, [s * 0.1, 0.86, -0.142], [0, 0, 0], false), // pómulos hundidos
-      box([0.085, 0.065, 0.012], black, [s * 0.065, 0.945, -0.146], [0, 0, 0], false), // cuencas
-      box([0.026, 0.026, 0.006], eye, [s * 0.065, 0.945, -0.153], [0, 0, 0], false),
-      box([0.03, 0.08, 0.05], skin, [s * 0.145, 0.93, 0]), // orejas
-    ]),
-    box([0.04, 0.07, 0.04], skin, [0, 0.89, -0.16]),
-    box([0.17, 0.05, 0.012], black, [0, 0.805, -0.141], [0, 0, 0], false),
-    ...[0, 1, 2, 3, 4, 5].map((i) => box([0.016, 0.03 + (i % 2) * 0.006, 0.006], teeth, [-0.06 + i * 0.024, 0.81, -0.149], [0, 0, 0], false)),
-  );
-  const { root, upper } = assemble(body, legs(p, 0x18161a), DEALER_SCALE);
-  const k = (v: V3): V3 => [v[0] * DEALER_SCALE, v[1] * DEALER_SCALE, v[2] * DEALER_SCALE];
+  const bean = buildBean(color, (hex, _emissive, basic) => (basic ? p.glow(hex) : p.std(hex)), croupier);
+  const K = 0.5, DY = -0.2;
+  bean.root.remove(...bean.legs, ...bean.arms);
+  bean.root.scale.setScalar(K);
+  bean.root.position.y = DY;
+  const mitt = group(new THREE.Mesh(new THREE.SphereGeometry(0.05 * (croupier ? 1.35 : 1), 12, 8), p.std(0xfff2dc, 0.6)));
+  const { root, upper } = assemble(group(bean.root), legs(p, croupier ? 0x1c1a24 : 0x2a0e1c), scale);
+  const k = (v: V3): V3 => [v[0] * scale, v[1] * scale, v[2] * scale];
   return {
-    root, upper, head: k([0, 0.93, -0.01]), shoulders: [k([-0.31, 0.58, 0.02]), k([0.31, 0.58, 0.02])], eyes: eyes.map(k),
-    hand: hand(skin, 1.35), sleeve: coat, dim: p.dim,
+    root, upper, head: k([0, 1.55 * K + DY, -0.01]), shoulders: [k([-0.22, 1.2 * K + DY, 0.02]), k([0.22, 1.2 * K + DY, 0.02])], eyes: [],
+    hand: mitt, sleeve: p.std(croupier ? 0x1c1a24 : new THREE.Color(color).multiplyScalar(0.9).getHex()), dim: p.dim,
   };
 }
 
-export function buildHuman(color: number): Character {
-  const p = palette();
-  const c = new THREE.Color(color);
-  const shirt = p.std(c.clone().multiplyScalar(0.8).getHex()), collar = p.std(c.clone().multiplyScalar(0.5).getHex());
-  const skin = p.std(0xdcb898, 0.7), hair = p.std(0x3a2618, 0.95), white = p.std(0xeeeeee, 0.5);
-  const dark = p.std(0x1c1c24, 0.6), lips = p.std(0x8a4a44, 0.6);
-  const body = group(
-    box([0.44, 0.46, 0.26], shirt, [0, 0.25, 0.02]),
-    box([0.5, 0.08, 0.28], shirt, [0, 0.45, 0.02]),
-    box([0.2, 0.03, 0.18], collar, [0, 0.49, 0]),
-    box([0.09, 0.08, 0.09], skin, [0, 0.53, 0]),
-    box([0.22, 0.25, 0.22], skin, [0, 0.68, -0.01]),
-    box([0.235, 0.05, 0.235], hair, [0, 0.81, 0.005]),
-    box([0.235, 0.2, 0.03], hair, [0, 0.71, 0.11]),
-    ...[-1, 1].flatMap((s) => [
-      box([0.012, 0.1, 0.17], hair, [s * 0.116, 0.75, 0.03]),
-      box([0.045, 0.032, 0.004], white, [s * 0.05, 0.69, -0.121], [0, 0, 0], false),
-      box([0.02, 0.026, 0.004], dark, [s * 0.05, 0.69, -0.124], [0, 0, 0], false),
-      box([0.05, 0.01, 0.006], hair, [s * 0.05, 0.725, -0.122], [0, 0, 0], false),
-    ]),
-    box([0.03, 0.05, 0.03], skin, [0, 0.66, -0.13]),
-    box([0.07, 0.012, 0.006], lips, [0, 0.61, -0.121], [0, 0, 0], false),
-  );
-  const { root, upper } = assemble(body, legs(p, 0x2a2c38), 1);
-  return {
-    root, upper, head: [0, 0.68, -0.01], shoulders: [[-0.24, 0.45, 0.02], [0.24, 0.45, 0.02]], eyes: [],
-    hand: hand(skin, 1), sleeve: shirt, dim: p.dim,
-  };
-}
+export const buildDealer = (): Character => seated(0xf2cc4a, true, DEALER_SCALE);
+export const buildHuman = (color: number): Character => seated(color, false, 1);
 
 /** Caja de 1 m de alto (a lo largo de y): el render la estira entre dos puntos (brazos). */
 export function buildLimb(mat: THREE.Material): THREE.Mesh {

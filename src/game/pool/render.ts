@@ -1,8 +1,9 @@
 // Render de Billar: mesa vista desde arriba en 3D (Three.js, proyección ortogonal) con bolas que ruedan y
 // caen por las troneras; encima, en 2D, la línea de tiro, el taco y el HUD (jugadores, potencia, efecto).
+import { C_DIM, C_GOLD, C_LINE, C_LOSE, C_MUTE, C_TEXT } from "../core/theme";
 import * as THREE from "three";
 import { PLAYER_COLORS, type RGB } from "../core/config";
-import { badge, css, fitText, line, panel, shadowText, strokeCircle, text, titleText, fillCircle, type Ctx } from "../core/draw";
+import { badge, css, fitText, line, panel, shadowText, strokeCircle, text, titleText, fillCircle, type Ctx, hudStrip } from "../core/draw";
 import { glRenderer, renderInto } from "../core/three";
 import {
   BALL_COLORS, BALL_R, BAR, FOLLOW_K, CORNER_R, HEAD_X, PH, PW, POCKETS, RAIL, SHOT_TIME, SIDE_R, SPIN, TCX, TCY, TH, TW, ZOOM,
@@ -259,7 +260,7 @@ export class PoolRenderer {
       ctx.restore();
     }
     if (v.phase === 0 && v.placing) {
-      strokeCircle(ctx, cx, cy, BALL_R * ZOOM + 2, [255, 236, 120], 1);
+      strokeCircle(ctx, cx, cy, BALL_R * ZOOM + 2, C_GOLD, 1);
       return;
     }
     if (v.phase === 2) return;
@@ -357,14 +358,14 @@ export class PoolRenderer {
     const color = PLAYER_COLORS[p];
     const four = v.names.length === 4;
     const shooter = v.shooters[p];
-    panel(ctx, x, 2, 128, 29, active ? [255, 236, 120] : [110, 110, 140], 0.85);
+    panel(ctx, x, 2, 128, 29, active ? C_GOLD : C_MUTE, 0.85);
     // En dobles, una chapa por compañero; la del que tira ahora, más grande.
     const seats = four ? [p, p + 2] : [p];
     seats.forEach((s, i) => badge(ctx, x + 9 + i * 11, 11, s === shooter ? 5 : 3.6, color, String(s + 1)));
     const nx = x + 17 + (four ? 11 : 0);
     const label = fitText(ctx, v.names[shooter] + (shooter === v.me ? " (tú)" : ""), 108 - (nx - x) + 8 - 24, TINY);
     shadowText(ctx, label, nx, 7, active ? [255, 255, 255] : [190, 190, 205], TINY);
-    shadowText(ctx, `★${v.wins[p] ?? 0}`, x + 123, 7, [255, 220, 60], TINY, "right");
+    shadowText(ctx, `★${v.wins[p] ?? 0}`, x + 123, 7, C_GOLD, TINY, "right");
     // Bolas de su grupo: apagadas las que ya cayeron; hasta que haya grupos, siete huecos.
     const g = v.groups[p];
     for (let i = 0; i < 7; i++) {
@@ -374,21 +375,22 @@ export class PoolRenderer {
       else this.pip(ctx, x + 9 + i * 11, 23, id, on);
     }
     this.pip(ctx, x + 9 + 7 * 11 + 3, 23, 8, v.balls[8].pocket < 0);
-    if (v.phase === 0 && v.turn === shooter && v.ai[shooter]) shadowText(ctx, "...", x + 100, 7, [255, 236, 120], TINY);
+    if (v.phase === 0 && v.turn === shooter && v.ai[shooter]) shadowText(ctx, "...", x + 100, 7, C_GOLD, TINY);
   }
 
   private drawHud(ctx: Ctx, v: PoolView) {
+    hudStrip(ctx, PW, 33);
     this.playerPanel(ctx, v, 0, 22);
     this.playerPanel(ctx, v, 1, 186);
     // Reloj del turno entre los dos jugadores.
     const left = Math.max(0, Math.ceil(v.timer));
     const low = v.phase === 0 && left <= 10;
-    panel(ctx, 155, 6, 26, 21, low ? [255, 90, 80] : [255, 207, 80], 0.85);
+    panel(ctx, 155, 6, 26, 21, low ? C_LOSE : C_GOLD, 0.85);
     titleText(ctx, v.phase === 0 ? String(Math.min(SHOT_TIME, left)) : "-", 168, 16.5, low ? [255, 120, 100] : [255, 255, 255], "10px", "center", "middle");
 
     // Barra de potencia (se arrastra hacia abajo y se suelta).
     const active = v.mine && v.phase === 0 && !v.placing;
-    panel(ctx, BAR.x - 1, BAR.y - 1, BAR.w + 2, BAR.h + 2, active ? [255, 236, 120] : [90, 90, 120], 0.85);
+    panel(ctx, BAR.x - 1, BAR.y - 1, BAR.w + 2, BAR.h + 2, active ? C_GOLD : C_MUTE, 0.85);
     const segs = 14, sh = BAR.h / segs;
     for (let i = 0; i < segs; i++) {
       const on = (i + 1) / segs <= v.aim.power + 1e-6 || (i / segs < v.aim.power && v.aim.power > 0);
@@ -400,35 +402,35 @@ export class PoolRenderer {
     const ky = BAR.y + BAR.h * v.aim.power;
     ctx.fillStyle = active ? "#fff" : "#9a9ab0";
     ctx.fillRect(BAR.x - 2, ky - 1.2, BAR.w + 4, 2.4);
-    text(ctx, "POT", BAR.x + BAR.w / 2 + 0.5, BAR.y - 9, [200, 200, 220], "6px", "center");
+    text(ctx, "POT", BAR.x + BAR.w / 2 + 0.5, BAR.y - 9, C_DIM, "6px", "center");
 
     // Bola de efecto.
-    text(ctx, "EFE", SPIN.x + 0.5, SPIN.y - SPIN.r - 8, [200, 200, 220], "6px", "center");
+    text(ctx, "EFE", SPIN.x + 0.5, SPIN.y - SPIN.r - 8, C_DIM, "6px", "center");
     fillCircle(ctx, SPIN.x, SPIN.y, SPIN.r, [244, 244, 238]);
-    strokeCircle(ctx, SPIN.x, SPIN.y, SPIN.r, active ? [255, 236, 120] : [90, 90, 120], 1.2);
+    strokeCircle(ctx, SPIN.x, SPIN.y, SPIN.r, active ? C_GOLD : C_MUTE, 1.2);
     line(ctx, SPIN.x - SPIN.r + 2, SPIN.y, SPIN.x + SPIN.r - 2, SPIN.y, [200, 200, 195], 0.5);
     line(ctx, SPIN.x, SPIN.y - SPIN.r + 2, SPIN.x, SPIN.y + SPIN.r - 2, [200, 200, 195], 0.5);
     fillCircle(ctx, SPIN.x + v.aim.side * (SPIN.r - 2.2), SPIN.y - v.aim.top * (SPIN.r - 2.2), 2.2, [210, 30, 30]);
 
     // Mensaje / ayuda.
-    if (v.netLabel) shadowText(ctx, v.netLabel, PW - 4, PH - 19, [200, 200, 220], TINY, "right");
+    if (v.netLabel) shadowText(ctx, v.netLabel, PW - 4, PH - 19, C_DIM, TINY, "right");
     const msg = v.msg || v.footer;
     if (msg && v.phase !== 2) {
-      shadowText(ctx, fitText(ctx, msg, PW - 40, TINY), PW / 2 + 8, PH - 10, v.msg ? [255, 236, 120] : [235, 235, 245], TINY, "center");
+      shadowText(ctx, fitText(ctx, msg, PW - 40, TINY), PW / 2 + 8, PH - 10, v.msg ? C_GOLD : C_TEXT, TINY, "center");
     }
     if (v.phase === 2) this.drawResult(ctx, v);
   }
 
   private drawResult(ctx: Ctx, v: PoolView) {
     const w = v.winner;
-    panel(ctx, 52, 70, 232, 62, [255, 61, 139], 0.9);
+    panel(ctx, 52, 70, 232, 62, C_LINE, 0.9);
     const who = v.names.length === 4 ? `EQUIPO ${w + 1}` : v.names[w].toUpperCase();
     titleText(ctx, `¡GANA ${who}!`, 168, 76, PLAYER_COLORS[w], MID);
     const reason = v.msg.includes(":") ? v.msg.slice(v.msg.indexOf(":") + 1).trim() : v.msg;
-    text(ctx, fitText(ctx, reason, 216, TINY), 168, 96, [235, 235, 245], TINY, "center");
-    text(ctx, `★ ${v.wins[0] ?? 0} - ${v.wins[1] ?? 0}`, 168, 108, [255, 220, 60], SMALL, "center");
+    text(ctx, fitText(ctx, reason, 216, TINY), 168, 96, C_TEXT, TINY, "center");
+    text(ctx, `★ ${v.wins[0] ?? 0} - ${v.wins[1] ?? 0}`, 168, 108, C_GOLD, SMALL, "center");
     const lit = Math.floor(this.time * 2) % 2 === 0;
-    text(ctx, fitText(ctx, v.footer, 222, TINY), 168, 120, lit ? [255, 236, 190] : [140, 130, 105], TINY, "center");
+    text(ctx, fitText(ctx, v.footer, 222, TINY), 168, 120, lit ? C_TEXT : C_MUTE, TINY, "center");
   }
 }
 

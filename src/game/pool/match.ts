@@ -338,6 +338,12 @@ export class Match {
       return;
     }
 
+    // Red de seguridad: sin bolas en la mesa no hay nada que jugar (una partida de CPU se quedaba así para siempre).
+    if (t.balls.every((b, i) => i === 0 || b.pocket >= 0)) {
+      this.finish(foul ? otherT : myT, "mesa vacía");
+      return;
+    }
+
     if (foul) {
       this.passTurn(true);
       this.say(`Falta: ${foul}. Mano para ${this.name(this.turn)}`);

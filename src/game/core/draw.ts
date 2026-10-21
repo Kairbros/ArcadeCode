@@ -1,5 +1,6 @@
 // Primitivas de dibujo sobre Canvas 2D (equivalentes a pygame.draw).
 import type { RGB } from "./config";
+import { C_BG, C_LINE } from "./theme";
 import { drawPixelText, fontSize, measurePixelText, pixelDot } from "./pixelfont";
 
 export type Ctx = CanvasRenderingContext2D;
@@ -188,8 +189,8 @@ export function mix(a: RGB, b: RGB, k: number): RGB {
  * lógicas: 1 en los juegos de baja resolución, 2 en Bomberman).
  */
 export function panel(
-  ctx: Ctx, x: number, y: number, w: number, h: number, border: RGB = [235, 235, 245], alpha = 0.8,
-  bg: RGB = [10, 10, 24], u = 1,
+  ctx: Ctx, x: number, y: number, w: number, h: number, border: RGB = C_LINE, alpha = 0.8,
+  bg: RGB = C_BG, u = 1,
 ) {
   ctx.fillStyle = "rgba(0,0,0,0.45)";
   ctx.fillRect(x + u * 2, y + h, w - u, u * 1.5);
@@ -236,4 +237,12 @@ export function segmentBar(ctx: Ctx, x: number, y: number, w: number, h: number,
       ctx.fillRect(x + i * (sw + gap), y, sw, Math.min(1, h / 3));
     }
   }
+}
+
+/** Franja de arriba del casino: ciruela con un filo naranja debajo (`h` = alto sin contar el filo). */
+export function hudStrip(ctx: Ctx, w: number, h: number, u = 1) {
+  ctx.fillStyle = "rgba(34,16,40,0.82)";
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(255,138,36,0.9)";
+  ctx.fillRect(0, h, w, u);
 }

@@ -9,7 +9,7 @@ export const SNAPSHOT_HZ = 30;
 // --- Pantalla ---
 /** Tamaño lógico del lienzo cuando no hay juego (menú, conectando). */
 export const DEFAULT_SIZE = [720, 680] as const;
-export const BG_COLOR: RGB = [20, 20, 28];
+export const BG_COLOR: RGB = [34, 16, 40];
 
 // --- Jugadores ---
 export const PLAYER_NAMES = ["Jugador 1", "Jugador 2", "Jugador 3", "Jugador 4"];

@@ -45,4 +45,4 @@ export class KartsInput implements DriveSource {
   }
 }
 
-export const KARTS_HINT = "↑ acelerar · ← → girar · SHIFT derrapar · ESPACIO objeto";
+export const KARTS_HINT = "↑ acelerar · ← → girar · SHIFT derrape · ESPACIO objeto";
