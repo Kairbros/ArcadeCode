@@ -1,4 +1,4 @@
-# Memoria del proyecto: Arcade (Bomberman, Karts, Sumo de bolas, Monigotes, Ruleta de cartuchos, Bloques y Casino de deudas)
+# Memoria del proyecto: Arcade (Bomberman, Karts, Sumo de bolas, Monigotes, Ruleta de cartuchos, Bloques, Casino de deudas y Billar)
 
 Guía para quien vaya a extender el proyecto (persona o agente). Resume decisiones, contratos, despliegue
 y trampas conocidas. El README cubre el uso; este documento, el porqué y el cómo extender.
@@ -86,6 +86,7 @@ src/game/core/three.ts     3D compartido: un solo WebGLRenderer (`glRenderer`), 
 src/game/stick/            config, stages, fight (física+armas+bots+árbitro), input, render (poses por código), game
 src/game/ruleta/           config, match (reglas+árbitro), bot, state (estado de red), input (teclas+selector),
                            math3d (vectores/giros), textures (generadas), models (Three.js), render (escena+HUD), game
+src/game/pool/             config, table (física + trace), match (reglas), bot, input (ratón+teclado), render (3D ortogonal + HUD), game
 src/game/blocks/           config, blocks (tipos), world (generación con cuevas y menas+luz+rayo+diff), mesher (chunks), player (física),
                            pilot (jugador propio), atlas (texturas), input (teclado+ratón), render (Three.js+HUD), game;
                            supervivencia: items, inventory, crafting (recetas), craftui (pantalla con ratón), icons,
@@ -152,42 +153,58 @@ src/game/blocks/           config, blocks (tipos), world (generación con cuevas
 
 ## 6. Karts (claves)
 
-- **3D con Three.js** en estilo de bloques (antes era modo 7 por software), 256×224 lógicos (`KW`×`KH`).
-  Escena en `render.ts` (`Stage`, se rehace al cambiar de circuito y libera la anterior con `disposeScene`);
-  coordenadas del juego × `S` (0,05): x → x, y del mapa → z, altura del terreno → y.
-  - Suelo: el dibujo del circuito (`trackCanvas`, un lienzo TEX×TEX = 1536) como textura sobre la rejilla
-    del relieve, con caras planas. Más allá, una llanura en la niebla.
-  - **Relieve** (`terrain.ts`, `terrainOf`/`heightAt`): sale de la semilla (igual en anfitrión e invitado).
-    La pista sube y baja con 3 ondas largas suavizadas a lo largo de la vuelta y es plana de lado a lado
-    (cerca de la pista la altura es la del punto más cercano de la línea central); lejos, colinas. Medido en
-    50 circuitos: ~18 ms de cálculo, cuestas de hasta ~21°, inclinación lateral ≤ 3°, desnivel ~60 u.
-    **Solo visual**: la física y la red siguen siendo planas (no hay que tocar `physics.ts`).
-    `heightAt` interpola en el mismo triángulo que la malla para que los karts apoyen justo en el suelo.
-  - Karts, decorados (árbol, arbusto, cactus, roca, pino), plátanos y proyectiles: cajas juntadas con
-    `blockGeometry` (una malla por modelo). Montañas escalonadas y nubes de cubos sin niebla, arco de meta
-    a cuadros, cajas "?" que cambian de color.
-  - Cámara detrás del kart (`CAM_DIST`, `CAM_HEIGHT`), sigue `ma` (no el morro) y mira a `CAM_LOOK` por
-    delante siguiendo las cuestas (`lookPitch`). Lo que queda entre la cámara y tu kart (otros karts en la
-    parrilla, árboles al salirse) se oculta.
-  - Sol con sombras que acompaña al kart propio; chispas del derrape y llamas del turbo de cubitos.
-  - HUD y minimapa en 2D; el número de cada rival se proyecta encima de su kart.
+- **3D con Three.js**, 256×224 lógicos (`KW`×`KH`). Estilo redondeado (2026-10-21, a petición: «que no se vea cuadrado»): nada de cajas,
+  todo con cápsulas, cilindros y esferas de sombreado suave (`models.ts`), igual que el casino. Piezas:
+  - `stage.ts` (`Stage`, escena de un circuito; se rehace al cambiar de circuito y libera con `disposeScene`),
+    `models.ts` (kart brillante con ruedas que giran y poroto al volante, decorados, montañas y nubes de bolas, objetos),
+    `tunnel.ts` (cueva), `render.ts` (cámara, HUD, minimapa, resultados). Coordenadas del juego × `S` (0,05).
+  - Suelo: `trackCanvas` (lienzo TEX×TEX, manchas redondas, flores/ondas/destellos según el tema) sobre el relieve de `terrain.ts`
+    (`heightAt`, solo visual salvo lo de abajo); sombreado suave. Decorados **instanciados** (un dibujo por tipo; los que tapan la
+    vista se ocultan poniendo su matriz a cero). Cámara detrás del kart; FOV más abierto con turbo/estrella; más alta en los saltos.
+- **5 temas** (`track.ts: THEMES`; el circuito sale de la semilla): Pradera, Desierto, Nieve, **Espacio** (estilo Rainbow Road) y **Volcán** (estilo castillo de Bowser).
+  - Espacio (`theme.void`, `space.ts`): la pista es una cinta de neón que flota (bordes que recorren el arcoíris, estrellas en la textura), con estrellas,
+    nebulosas, planetas y sol; decorados flotantes (cristales brillantes, asteroides); desnivel ×1,8; sin túneles ni muro invisible. **Salirse del asfalto
+    es caer** (`Kart.fall`, `checkVoid`): al pasar `FALL_LIMIT` Lakitu recoge al kart (`respawn`: `RESPAWN_BACK` puntos antes del último tramo seguro,
+    baja en una nube `DROP_TIME` s). El invitado simula su propia caída; el anfitrión ve `z` negativa en la fila de red.
+  - Volcán (`theme.lava`): suelo de basalto con grietas, lava animada bajo el nivel de la pista más baja (nunca la inunda; `buildLava`), montañas con
+    cima de lava, antorchas con halo, brasas flotando; Nieve lleva copos. Las partículas (`buildAmbient`) dan vueltas alrededor de la cámara.
+  - **Peligros** (`hazards.ts`, `track.hazards`, 3 por circuito según el tema: chomp con cadena, thwomp que cae a golpes, meteoro): su posición sale solo
+    del tiempo de carrera (`hazardAt`), así anfitrión e invitados coinciden sin red; el anfitrión decide los golpes (`Race.updateHazards`, trompo si no hay
+    estrella ni trompo en curso). El kart abre un ala delta en los saltos largos (`z > 14`).
+- **Pulido (2026-10-21)**: **T** (anfitrión/local) cambia de circuito y empieza otra carrera (`Race.themeIdx`, en red `th` del estado; -1 = al azar).
+  HUD: título del circuito en la salida, ruleta de objetos al recoger, aviso de vuelta / «¡ÚLTIMA VUELTA!» y «¡CONTRAMANO!». Humo blanco al derrapar y polvo
+  fuera de pista (sprites en `Stage.puff`). Monedas reaparecen cada vuelta (`Kart.lap`). Frenar corta el turbo.
+  - Lecciones de las pruebas con piloto automático (hacerlas otra vez si se toca la física): en el espacio los karts caían ~20 veces por carrera. Causas: (1) tras
+    Lakitu la búsqueda de tramo (`locate` con pista de ±30 puntos) se quedaba lejos y volvía a caer: `respawn` ahora fija `seg`/`segT` y ajusta el progreso;
+    (2) placas de turbo antes de curvas cerradas: ahora exigen recta larga (`turnOver(i, 56)`) y la IA mira más lejos con turbo; (3) rampas con curva en el
+    aterrizaje: ahora 40 puntos rectos (48 en el espacio); (4) cinta del espacio más ancha (`RIBBON_HW`, `FALL_DIST`) con roce en el borde.
+  - Billar: una partida de CPU podía quedarse sin bolas en la mesa y no acabar nunca; `resolve` ahora cierra la partida si no queda ninguna bola de juego.
+- **Rampas, placas, monedas y túnel** (`track.ts`, `placeFeatures`, sale de la semilla con `Rng(seed ^ 0xfea7)`: no viajan por la red):
+  - Rampa (`track.ramps`, hasta 2, en tramos rectos de 36 puntos): al pasar por el labio (`RAMP_LEN` puntos tras `i`) a más de
+    `RAMP_MIN_SPEED` el kart sale volando (`Kart.z`, `vz`, gravedad `GRAVITY`). En el aire gira poco, no acelera, y **SHIFT hace un
+    truco** (campana) que da `TRICK_BOOST` s de turbo al aterrizar. `stage.ts: rampLift` sube visualmente al kart por la cuña.
+  - Placas de turbo (`track.pads`, flechas aditivas): `PAD_TIME` s de turbo al pisarlas. Monedas (`track.coins`): cada jugador recoge
+    las suyas (`Kart.taken`, no se sincronizan), hasta `MAX_COINS`; cada una da `COIN_SPEED` de velocidad máxima.
+  - Túnel (`track.tunnels`, 1 por circuito, ~30 puntos): arco de roca con portales y cristales de colores; por dentro oscurece la
+    luz del día (`Stage.dark`) y la pared está pegada al asfalto (`TUNNEL_LIMIT`, en `updateTrackPosition`).
+- Objetos (`config.ts`, `race.ts`): turbo, plátano, caparazón verde, **caparazón rojo** (teledirigido: sigue la pista hacia el de delante),
+  **estrella** (invencible y rápida `STAR_TIME` s), **bomba TNT** (caja de Crash; se arma a los 0,6 s, explota por contacto o a los
+  `BOMB_FUSE` s, radio `BOMB_RADIUS`) y **rayo** (frena a los que van delante `BOLT_TIME` s; solo sale si no vas primero). Los de atrás
+  reciben más estrellas, rayos y rojos (`randomItem`).
+- Red: filas de `k` del anfitrión con `[x, y, a, v, progreso, golpes, objeto, puesto, tiempo, ¿IA?, z, rayos, efectos]` (efectos: bits
+  1 estrella, 2 rayo, 4 turbo, 8 truco); `sh` caparazones `x,y,rojo`; `bm` bombas `x,y,mecha`; `ex` explosiones `x,y,edad`. El invitado
+  manda también `z`. Estrella y turbo se aplican al instante en su pantalla; el rayo llega por `slowSeq` (como los golpes por `spinSeq`).
+- Pruebas: `npm test -- karts` (rampa, truco, placa, monedas, túnel, 12 carreras de IA, los objetos nuevos).
 - Circuitos (`track.ts`): 70 % "cuadrícula" (contorno de un poliominó en 7×7 casillas de 170) y 30 %
   "orgánico" (envolvente con hendiduras/lenguas/eses), suavizado Chaikin ×4, validación
   (radio ≥ 42, separación entre tramos ≥ `TRACK_W+WALL_MARGIN+16`, longitud 2.400–5.600),
-  hasta 120 intentos y óvalo de emergencia. Meta en la recta más larga. Decoración sólida por tema.
+  hasta 120 intentos y óvalo de emergencia. Meta en la recta más larga.
 - Física (`physics.ts`): `a` = morro, `ma` = dirección de avance (se separan al derrapar),
   muro invisible a `TRACK_W/2 + WALL_MARGIN`, progreso en puntos de línea central (vueltas = progreso/n).
-- Derrape: Shift/C (saltito → derrape si se gira); miniturbo al soltar (azul > 0,8 s, naranja > 1,7 s).
-  Ajustado porque "derrapaba y giraba mucho" (el kart iba cruzado hasta ~83° y giraba más cerrado que con el
-  volante): ahora el giro derrapando es una fracción de `STEER_RATE` (`DRIFT_TURN`, `_IN`, `_OUT`), la dirección
-  de avance sigue al morro a `DRIFT_FOLLOW` y el cruce se limita a `DRIFT_MAX_SLIP` (~26°). Con volante a tope a
-  velocidad máxima: radio 74 u sin derrapar; derrapando 78 cerrando, 119 sin volante, 231 abriendo. La IA no
-  derrapa. En el render el morro se dibuja tal cual (sin exagerar el cruce).
-- Objetos: turbo, plátano, proyectil; los de atrás reciben más turbos. 3 vueltas, 4 corredores (IA rellena).
-- Red: **cada invitado simula su propio kart** (sin retraso) y envía posición; el anfitrión
-  (`race.ts`) arbitra cajas, golpes (`spinSeq`), objetos y llegada. Turbo se aplica al instante en el invitado.
-- IA: sigue la línea central con desvío propio y frena según el giro de los próximos ~150 u (`cornerSpeed`).
-- Probado con capturas de carreras reales (piloto automático en el kart propio) en los 3 temas.
+- Derrape: Shift/C (saltito → derrape si se gira); miniturbo al soltar (azul > 0,8 s, naranja > 1,7 s); giro derrapando = fracción de
+  `STEER_RATE` (`DRIFT_TURN*`), cruce limitado a `DRIFT_MAX_SLIP`. La IA no derrapa.
+- Red: **cada invitado simula su propio kart** (sin retraso) y envía posición; el anfitrión (`race.ts`) arbitra cajas, golpes, objetos y
+  llegada. 3 vueltas, 4 corredores (IA rellena). IA: sigue la línea central con desvío propio y frena según el giro de los próximos ~150 u.
 
 ## 6b. Sumo de bolas (claves)
 
@@ -524,6 +541,36 @@ girar** y un **mejorador de armas como el del mapa Town de Black Ops 2**, «expr
 - **Pruebas**: `test/deadzone-machines.test.ts` (arsenal y mejora, caja, energía, mejorador, invitado y precios) y capturas con
   `npm run shot -- test/browser/deadzone-visual.mjs` (plaza, caja girando, mejorador, las 16 armas, zombis y sangre) y `deadzone-rendimiento.mjs` (ms por fotograma quitando piezas).
 
+## 6i. Billar (claves)
+
+- **Qué es**: bola 8 estilo móvil (8 Ball Pool, con nombre propio «Billar»). Pantalla 320×200, mesa 240×120 vista
+  desde arriba con cámara **ortogonal** (`config.ts`: pantalla = centro + mundo × `ZOOM`), así el ratón se convierte a
+  mundo con `toWorld` sin proyecciones. Las bolas son esferas con textura generada (excepción razonada a la regla
+  de bloques: una bola de billar no se puede hacer con cajas).
+- **Archivos**: `table.ts` física a pasos fijos de 1/240 s con velocidad lineal y angular por bola (`wx`, `wy` giro
+  adelante/atrás, `wz` lateral): el taco da `v` y `ω = r × J / I` según dónde pega (hasta medio radio, `SPIN_GAIN` lo
+  exagera un poco); el paño resbala (`SLIDE_ACC`) hasta que la bola rueda y solo la frena `ROLL_DECEL`/`ROLL_DRAG`, y de
+  ahí salen solos seguir, retroceder y "stun"; el choque entre bolas lleva rozamiento (`BALL_FRIC`: arrastre y paso de
+  efecto lateral); las bandas devuelven menos energía cuanto más fuerte llega la bola y su roce (`RAIL_FRIC`) convierte
+  efecto lateral en desvío; los labios de las troneras son círculos de `JAW_R`; `Table.clone()` sirve a la IA para
+  ensayar. `trace` es la línea de tiro (bola fantasma, también la usa el render); `match.ts` reglas y
+  árbitro (`resolve`); `bot.ts` IA (bola fantasma + línea libre + ángulo de corte; los 5 mejores candidatos se **ensayan en una copia de
+  la mesa** con varias potencias y solo vale uno que entre; error ±0,35°); `input.ts` ratón/teclado (el taco sigue al cursor suavizado; Shift o clic derecho = puntería fina relativa, ×0,15); `render.ts` escena + taco + HUD; `game.ts` adaptadores.
+- **Asientos**: 2 o 4 (`kinds`). Equipo = `asiento % 2` (`groups`, `wins` y `left` van por equipo); en dobles
+  `nextOf` alterna el compañero que tira (`Match.shooterOf`). 0 anfitrión, 1.. invitados (`remote`), el resto `ai`
+  (o `local` sin bots = por turnos en el mismo equipo). Con ≤1 invitado, **P** alterna 1v1 / 2v2 antes del saque;
+  con 2 o más invitados es siempre 2v2. En 1v1 los invitados 2 y 3 solo miran. `PoolHost.key("KeyR")` solo actúa con la partida terminada.
+- **Reglas**: mesa abierta hasta la primera bola metida sin falta (no cuenta en el saque); falta = blanca embolsada,
+  no tocar nada, tocar primero bola ajena (o la 8 antes de tiempo), o ninguna bola a banda tras el contacto
+  (saque: 4 bolas a banda o una embolsada) → bola en mano para el rival. La 8 se marca (`aim.call`, auto con
+  `bestPocket` si no se elige) y pierde quien la mete antes de tiempo, con falta o en otra tronera. La 8 en el saque
+  rehace el triángulo. Pasados 40 s el turno es falta.
+- **Red**: el invitado con turno manda `PoolMsg` (ángulo, potencia, efecto, tronera, contadores `f` tiro y `k`
+  colocación **por turno** y `u` = número de turno `Match.turnNo`). El anfitrión ignora mensajes de otro turno
+  (así un clic perdido no dispara en el turno siguiente). Los invitados suavizan y extrapolan posiciones; la
+  blanca en mano la mueve el cursor local y se confirma con `k`.
+- **Pruebas**: `npm test -- pool` (física, 25 partidas CPU contra CPU, falta) y `npm run shot -- test/browser/pool.mjs`.
+
 ## 6e. Estilo 3D: bloques simples (regla del usuario)
 
 **Todo lo 3D se modela con cajas grandes y simples**, como figuras de bloques: una caja para el torso, otra para
@@ -600,6 +647,8 @@ Los HUD y el menú tienen aire de recreativa retro. Piezas, todas compartidas:
 - **Menú** (`ui/menu.ts`): monoespaciada en mayúsculas, esquinas rectas, sombras duras, neón (rosa `#ff3d8b`,
   cian `#3df2ff`), código y nombre en verde fósforo, color de acento por juego en el selector. La CSP de la
   webview no deja cargar fuentes: el logo "ARCADE" se dibuja con `titleText` en un canvas y va como `<img>` (data URL).
+- **Diseño único (2026-10-21)**: todos los juegos y el menú usan la paleta del casino (`core/theme.ts`: ciruela, filo naranja, dorado). Los HUD abren con `hudStrip` (franja ciruela + filo naranja) y los paneles toman `C_BG`/`C_LINE` por defecto. Colores nuevos: sacarlos de `theme.ts`, no inventarlos.
+- **Personajes únicos (2026-10-21)**: todos los jugadores son el «poroto» del casino (`core/bean.ts`: cápsula de color, ojos saltones, guantes, piececitos, bombín; `buildBean(color, mat, croupier)`). Lo usan Sumo (sobre la bola), Karts (al volante), Ruleta (jugadores y crupier = botones amarillo con fez), Bloques; Bomberman y Monigotes lo dibujan en 2D con el mismo diseño. Esto sustituye a la regla de «sin esferas» (6e) solo para los personajes. El casino aún tiene su propia copia en `scene.ts` (`character`).
 - Convenciones: paneles de resultados con borde rosa; el pie ("R: otra ronda...") alterna de tono como un "PULSA
   START"; el panel de quien tiene el turno (Ruleta) parpadea en amarillo; marcas de minimapa cuadradas.
 

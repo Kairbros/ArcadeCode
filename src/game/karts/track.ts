@@ -10,12 +10,23 @@
 import type { RGB } from "../core/config";
 import { css } from "../core/draw";
 import { Rng } from "../core/rng";
-import { CURB_W, POINT_STEP, RACERS, TEX, TRACK_W, WALL_MARGIN } from "./config";
+import { CURB_W, POINT_STEP, RACERS, RAMP_LEN, TEX, TRACK_W, TUNNEL_R, WALL_MARGIN } from "./config";
 
-export type DecoKind = "tree" | "bush" | "cactus" | "rock" | "pine";
+export type DecoKind = "tree" | "bush" | "cactus" | "rock" | "pine" | "crystal" | "asteroid" | "lavarock" | "torch";
+/** Los decorados flotantes o de adorno no chocan con el kart. */
+export const SOLID_DECOS: readonly DecoKind[] = ["tree", "bush", "cactus", "rock", "pine", "lavarock", "torch"];
+
+export type HazardKind = "chomp" | "thwomp" | "meteor";
 
 export interface Theme {
   name: string;
+  /** Espacio: la pista flota en el vacío (fuera del asfalto se cae). */
+  void: boolean;
+  /** Volcán: lagos de lava en los valles. */
+  lava: boolean;
+  /** Multiplica el desnivel de la pista (el espacio, una montaña rusa). */
+  relief: number;
+  hazard: HazardKind;
   grass: RGB;
   grass2: RGB;
   sand: RGB;
@@ -29,21 +40,68 @@ export interface Theme {
 
 const THEMES: Theme[] = [
   {
-    name: "Pradera", grass: [72, 160, 72], grass2: [60, 140, 62], sand: [214, 196, 140], road: [96, 96, 108],
-    skyTop: [70, 130, 230], skyBottom: [170, 210, 250], hills: [50, 120, 60], hillsFar: [120, 160, 190],
+    name: "Pradera", void: false, lava: false, relief: 1, hazard: "chomp",
+    grass: [84, 192, 70], grass2: [66, 168, 62], sand: [236, 214, 150], road: [92, 96, 116],
+    skyTop: [56, 132, 245], skyBottom: [176, 224, 255], hills: [58, 156, 74], hillsFar: [130, 180, 215],
     decos: ["tree", "tree", "bush"],
   },
   {
-    name: "Desierto", grass: [222, 184, 112], grass2: [206, 166, 98], sand: [240, 214, 160], road: [118, 104, 96],
-    skyTop: [240, 140, 70], skyBottom: [250, 210, 150], hills: [170, 110, 70], hillsFar: [214, 160, 120],
+    name: "Desierto", void: false, lava: false, relief: 1, hazard: "chomp",
+    grass: [240, 196, 108], grass2: [222, 174, 92], sand: [252, 226, 164], road: [128, 100, 98],
+    skyTop: [255, 128, 64], skyBottom: [255, 214, 150], hills: [214, 120, 70], hillsFar: [236, 170, 120],
     decos: ["cactus", "cactus", "rock"],
   },
   {
-    name: "Nieve", grass: [228, 236, 246], grass2: [206, 218, 234], sand: [180, 196, 214], road: [88, 96, 118],
-    skyTop: [40, 60, 120], skyBottom: [150, 170, 210], hills: [140, 160, 190], hillsFar: [90, 110, 150],
+    name: "Nieve", void: false, lava: false, relief: 1, hazard: "chomp",
+    grass: [236, 244, 255], grass2: [212, 226, 246], sand: [186, 206, 232], road: [84, 96, 128],
+    skyTop: [48, 70, 150], skyBottom: [168, 196, 240], hills: [150, 176, 214], hillsFar: [100, 124, 176],
     decos: ["pine", "pine", "rock"],
   },
+  {
+    name: "Espacio", void: true, lava: false, relief: 1.8, hazard: "meteor",
+    grass: [10, 8, 30], grass2: [18, 12, 48], sand: [120, 90, 255], road: [26, 24, 64],
+    skyTop: [4, 2, 16], skyBottom: [34, 14, 80], hills: [40, 30, 90], hillsFar: [60, 40, 120],
+    decos: ["crystal", "asteroid", "crystal"],
+  },
+  {
+    name: "Volcán", void: false, lava: true, relief: 1.3, hazard: "thwomp",
+    grass: [74, 52, 56], grass2: [54, 38, 44], sand: [150, 84, 52], road: [64, 58, 74],
+    skyTop: [48, 8, 16], skyBottom: [236, 100, 40], hills: [96, 44, 40], hillsFar: [170, 66, 40],
+    decos: ["lavarock", "lavarock", "torch"],
+  },
 ];
+
+/** Peligro del circuito (chomp, thwomp o meteoro): su posición sale solo del tiempo de carrera. */
+export interface Hazard {
+  kind: HazardKind;
+  /** Punto de la línea central donde está y desfase de su movimiento (s). */
+  i: number;
+  phase: number;
+}
+
+/** Rampa de salto: `i` es el punto de la línea central donde empieza. */
+export interface Ramp {
+  i: number;
+}
+
+/** Placa de turbo (flechas en el asfalto): punto de la línea central y desvío lateral. */
+export interface Pad {
+  i: number;
+  off: number;
+  x: number;
+  y: number;
+}
+
+/** Tramo en túnel (cueva): puntos de la línea central desde `from` hasta `to` (sin dar la vuelta). */
+export interface Tunnel {
+  from: number;
+  to: number;
+}
+
+export interface Coin {
+  x: number;
+  y: number;
+}
 
 export interface StartSlot {
   x: number;
@@ -68,6 +126,11 @@ export interface Track {
   dir: Float32Array; // ángulo de la pista en cada punto
   theme: Theme;
   boxes: { x: number; y: number }[];
+  ramps: Ramp[];
+  hazards: Hazard[];
+  pads: Pad[];
+  tunnels: Tunnel[];
+  coins: Coin[];
   grid: StartSlot[];
   decos: Deco[];
   canvas: HTMLCanvasElement | null; // dibujo del suelo: se pinta bajo demanda (necesita DOM)
@@ -340,7 +403,10 @@ function straightestStart(dir: Float32Array, n: number): number {
   return best;
 }
 
-export function generateTrack(seed: number): Track {
+export const THEME_NAMES = THEMES.map((t) => t.name);
+
+/** `themeIdx` fuerza el tema (el anfitrión lo elige con T); -1 = al azar según la semilla. */
+export function generateTrack(seed: number, themeIdx = -1): Track {
   const rng = new Rng(seed ^ 0x51ed27);
   let shape: { px: Float32Array; py: Float32Array; n: number } | null = null;
   let dir: Float32Array = new Float32Array(0);
@@ -393,13 +459,16 @@ export function generateTrack(seed: number): Track {
     });
   }
 
-  const theme = rng.choice(THEMES);
-  const decos = placeDecos(rng, { n, px, py, dir }, theme);
-  return { seed, n, px, py, dir, theme, boxes, grid, decos, canvas: null, attempts };
+  const picked = rng.choice(THEMES);
+  const theme = themeIdx >= 0 ? THEMES[themeIdx % THEMES.length] : picked;
+  const line = { n, px, py, dir };
+  const { ramps, pads, tunnels, coins, hazards } = placeFeatures(new Rng(seed ^ 0xfea7), line, theme);
+  const decos = placeDecos(rng, line, theme, tunnels);
+  return { seed, n, px, py, dir, theme, boxes, ramps, hazards, pads, tunnels, coins, grid, decos, canvas: null, attempts };
 }
 
 /** Decoración junto a la pista (árboles, cactus...): fuera del asfalto y sin amontonarse. */
-function placeDecos(rng: Rng, line: Centerline, theme: Theme): Deco[] {
+function placeDecos(rng: Rng, line: Centerline, theme: Theme, tunnels: Tunnel[]): Deco[] {
   const decos: Deco[] = [];
   const clear = TRACK_W / 2 + CURB_W + 12;
   for (let attempt = 0; attempt < 700 && decos.length < 110; attempt++) {
@@ -409,11 +478,86 @@ function placeDecos(rng: Rng, line: Centerline, theme: Theme): Deco[] {
     const x = line.px[i] - Math.sin(line.dir[i]) * off * side;
     const y = line.py[i] + Math.cos(line.dir[i]) * off * side;
     if (x < 20 || y < 20 || x > TEX - 20 || y > TEX - 20) continue;
-    if (locate(line, x, y).d < clear) continue; // cerca de otro tramo de pista
+    const loc = locate(line, x, y);
+    if (loc.d < clear) continue; // cerca de otro tramo de pista
+    if (tunnels.some((t) => loc.i >= t.from - 6 && loc.i <= t.to + 6 && loc.d < TUNNEL_R + 28)) continue; // sobre el túnel
     if (decos.some((d) => (d.x - x) ** 2 + (d.y - y) ** 2 < 22 * 22)) continue;
     decos.push({ x, y, kind: rng.choice(theme.decos), size: rng.uniform(0.8, 1.3) });
   }
   return decos;
+}
+
+/** Giro acumulado de la pista entre los puntos i y i + len (rad, en valor absoluto del mayor giro de la ventana). */
+function turnOver(line: Centerline, i: number, len: number): number {
+  let worst = 0;
+  const d0 = line.dir[i % line.n];
+  for (let k = 0; k <= len; k += 2) worst = Math.max(worst, Math.abs(wrap(line.dir[(i + k) % line.n] - d0)));
+  return worst;
+}
+
+/**
+ * Rampas, placas de turbo, túnel y monedas. Salen de la semilla, así que el anfitrión y los invitados
+ * los tienen iguales sin mandarlos por la red. Solo se ponen en tramos rectos (la rampa necesita
+ * aterrizar en la pista) y lejos de la meta.
+ */
+function placeFeatures(
+  rng: Rng, line: Centerline, theme: Theme,
+): { ramps: Ramp[]; pads: Pad[]; tunnels: Tunnel[]; coins: Coin[]; hazards: Hazard[] } {
+  const { n, px, py, dir } = line;
+  const lo = Math.floor(n * 0.08), hi = Math.floor(n * 0.94);
+  const free = (i: number, len: number, used: number[][]) => used.every(([a, b]) => i + len < a - 8 || i > b + 8);
+  const used: number[][] = [];
+
+  // Túnel: ~30 puntos (180 unidades), con curvas suaves permitidas.
+  const tunnels: Tunnel[] = [];
+  const TLEN = 30;
+  for (let tries = 0; tries < 80 && !tunnels.length && !theme.void; tries++) {
+    const i = Math.floor(rng.uniform(lo + 6, hi - TLEN - 30));
+    if (turnOver(line, i, TLEN) < 0.7 && free(i, TLEN, used)) {
+      tunnels.push({ from: i, to: i + TLEN });
+      used.push([i, i + TLEN]);
+    }
+  }
+  // Rampas: tramo recto de ~36 puntos para aterrizar en la pista.
+  const ramps: Ramp[] = [];
+  for (let tries = 0; tries < 160 && ramps.length < 2; tries++) {
+    const i = Math.floor(rng.uniform(lo, hi - 40));
+    // En el espacio aterrizar fuera de la cinta es caer: ahí la recta de después tiene que ser más limpia.
+    const len = theme.void ? 48 : 40;
+    if (turnOver(line, i, len) < (theme.void ? 0.3 : 0.6) && free(i, len, used)) {
+      ramps.push({ i });
+      used.push([i, i + len]);
+    }
+  }
+  // Peligros (chomp, thwomp o meteoro según el tema): en tramos rectos, lejos de rampas y túnel.
+  const hazards: Hazard[] = [];
+  for (let tries = 0; tries < 300 && hazards.length < 3; tries++) {
+    const i = Math.floor(rng.uniform(lo + 20, hi));
+    if (turnOver(line, i, 8) > 0.3 || !free(i, 8, used) || hazards.some((h) => Math.abs(h.i - i) < 60)) continue;
+    hazards.push({ kind: theme.hazard, i, phase: rng.uniform(0, 6) });
+    used.push([i, i + 8]);
+  }
+  // Placas de turbo: tramos rectos, repartidas por la vuelta.
+  const pads: Pad[] = [];
+  for (let tries = 0; tries < 300 && pads.length < 6; tries++) {
+    const i = Math.floor(rng.uniform(lo, hi));
+    // Recta larga por delante: el turbo dura ~300 unidades y no debe lanzar a nadie contra una curva cerrada.
+    if (turnOver(line, i, 10) > 0.2 || turnOver(line, i, 56) > 0.6 || !free(i, 4, used)) continue;
+    if (pads.some((p) => Math.abs(p.i - i) < 50)) continue;
+    const off = rng.choice([-14, 0, 14]);
+    pads.push({ i, off, x: px[i] - Math.sin(dir[i]) * off, y: py[i] + Math.cos(dir[i]) * off });
+  }
+  // Monedas: filas de 5 cada pocos puntos, y un arco sobre cada rampa.
+  const coins: Coin[] = [];
+  const lane = (i: number, off: number) => ({ x: px[i % n] - Math.sin(dir[i % n]) * off, y: py[i % n] + Math.cos(dir[i % n]) * off });
+  for (let g = 0; g < 7; g++) {
+    const i0 = Math.floor(lo + ((hi - lo) * (g + rng.next() * 0.6)) / 7);
+    const off = rng.choice([-16, 0, 16]);
+    if (tunnels.some((t) => i0 + 14 > t.from && i0 < t.to) && g % 2) continue;
+    for (let k = 0; k < 5; k++) coins.push(lane(i0 + k * 3, off));
+  }
+  for (const r of ramps) for (let k = 1; k <= 5; k++) coins.push(lane(r.i + RAMP_LEN + k * 4, 0));
+  return { ramps, pads, tunnels, coins, hazards };
 }
 
 /** Pinta el suelo del circuito (hierba, arena, pianos, asfalto y meta) en un lienzo TEX×TEX. */
@@ -427,9 +571,40 @@ export function trackCanvas(track: Track): HTMLCanvasElement {
 
   c.fillStyle = css(th.grass);
   c.fillRect(0, 0, TEX, TEX);
-  c.fillStyle = css(th.grass2);
-  const specks = Math.round(6000 * (TEX / 1024) ** 2);
-  for (let i = 0; i < specks; i++) c.fillRect(rng.next() * TEX, rng.next() * TEX, 2 + rng.next() * 5, 2 + rng.next() * 5);
+  // Manchas redondas de otro tono (nada de cuadraditos) y detalles del tema: flores, ondas de arena, destellos.
+  c.fillStyle = css(th.grass2, 0.55);
+  const patches = Math.round(900 * (TEX / 1024) ** 2);
+  for (let i = 0; i < patches; i++) {
+    c.beginPath();
+    c.arc(rng.next() * TEX, rng.next() * TEX, 6 + rng.next() * 22, 0, Math.PI * 2);
+    c.fill();
+  }
+  const dots = Math.round(1400 * (TEX / 1024) ** 2);
+  for (let i = 0; i < dots; i++) {
+    const x = rng.next() * TEX, y = rng.next() * TEX;
+    if (th.name === "Pradera") {
+      c.fillStyle = ["#ffffff", "#ffe066", "#ff8ab8"][i % 3];
+      c.beginPath();
+      c.arc(x, y, 1.6 + rng.next() * 1.4, 0, Math.PI * 2);
+      c.fill();
+    } else if (th.name === "Volcán") {
+      c.strokeStyle = css([255, 120 + (i % 3) * 30, 30], 0.55);
+      c.lineWidth = 1.5;
+      c.beginPath();
+      c.moveTo(x, y);
+      c.lineTo(x + (rng.next() - 0.5) * 26, y + (rng.next() - 0.5) * 26);
+      c.stroke();
+    } else if (th.name === "Desierto") {
+      c.strokeStyle = css(th.sand, 0.5);
+      c.lineWidth = 2;
+      c.beginPath();
+      c.arc(x, y, 8 + rng.next() * 10, 0.2, Math.PI - 0.2);
+      c.stroke();
+    } else {
+      c.fillStyle = "rgba(255,255,255,0.8)";
+      c.fillRect(x, y, 2, 2);
+    }
+  }
 
   // Sombra en el suelo bajo cada decoración.
   c.fillStyle = "rgba(0,0,0,0.18)";
@@ -451,11 +626,13 @@ export function trackCanvas(track: Track): HTMLCanvasElement {
     c.strokeStyle = color;
     c.stroke(path);
   };
+  stroke(TRACK_W + 2 * CURB_W + 26, css(th.grass2, 0.5));
   stroke(TRACK_W + 2 * CURB_W + 18, css(th.sand));
   stroke(TRACK_W + 2 * CURB_W, "rgb(245,245,245)");
   stroke(TRACK_W + 2 * CURB_W, "rgb(214,40,40)", [10, 10]);
   stroke(TRACK_W, css(th.road));
-  stroke(2, "rgba(255,255,255,0.55)", [10, 16]);
+  stroke(TRACK_W - 14, css([th.road[0] + 10, th.road[1] + 10, th.road[2] + 12]));
+  stroke(3, "rgba(255,255,255,0.7)", [14, 16]);
   c.setLineDash([]);
 
   // Línea de meta a cuadros.

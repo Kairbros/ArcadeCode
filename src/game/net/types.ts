@@ -19,6 +19,8 @@ export interface HostGame {
   key(code: string): void;
   /** Esc: si el juego tiene algo abierto (un inventario), lo cierra y devuelve true para no salir al menú. */
   escape?(): boolean;
+  /** Libera lo que el juego tenga en la GPU al dejar de usarse (los juegos 3D pesados). */
+  dispose?(): void;
   frame(now: number): NetFrame;
   /** Mensaje de un invitado (index = número de jugador, 1..3). */
   onMessage(index: number, msg: unknown): void;
@@ -40,6 +42,7 @@ export interface GuestGame {
   draw(ctx: CanvasRenderingContext2D, pixelScale: number): void;
   /** Como en HostGame: Esc cierra lo que haya abierto en el juego. */
   escape?(): boolean;
+  dispose?(): void;
   /** Mensaje a enviar ahora, o undefined. El juego decide el ritmo según el transporte. */
   outgoing(transport: Transport): object | undefined;
 }

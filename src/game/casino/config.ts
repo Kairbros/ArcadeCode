@@ -214,15 +214,7 @@ export const ROB_SPEED = 1.15;
 export const ROB_ZONE = 0.24;
 
 // --- Colores (estilo «Gamble With Your Friends»: ciruela y burdeos cálidos, crema y un naranja de cartel) ---
-export const C_BG = [34, 16, 40] as const;
-export const C_PANEL = [74, 26, 52] as const;
-export const C_LINE = [255, 214, 150] as const;
-export const C_TEXT = [255, 244, 222] as const;
-export const C_DIM = [214, 168, 190] as const;
-export const C_ACCENT = [255, 138, 36] as const; // naranja de cartel
-export const C_GOLD = [255, 206, 74] as const;
+export { C_ACCENT, C_BG, C_DIM, C_GOLD, C_LINE, C_LOSE, C_PANEL, C_TEXT, C_WIN } from "../core/theme";
 export const C_RED = [232, 62, 84] as const;
 export const C_GREEN = [46, 189, 108] as const;
 export const C_BLACK = [42, 45, 58] as const;
-export const C_LOSE = [255, 86, 96] as const;
-export const C_WIN = [86, 226, 138] as const;

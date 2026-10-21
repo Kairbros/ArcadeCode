@@ -3,9 +3,11 @@
 // Las baldosas que quedan fuera del radio tiemblan y caen a la lava. El HUD se dibuja en 2D encima.
 // Coordenadas del juego: x a la derecha, y hacia la cámara, z hacia arriba; en la escena se usan
 // metros de juguete (× S) con y hacia arriba.
+import { C_DIM, C_GOLD, C_LINE, C_LOSE, C_MUTE, C_TEXT } from "../core/theme";
 import * as THREE from "three";
 import { PLAYER_COLORS, PLAYER_NAMES, type RGB } from "../core/config";
-import { badge, fitText, panel, segmentBar, shadowText, text, titleText, type Ctx } from "../core/draw";
+import { badge, fitText, panel, segmentBar, shadowText, text, titleText, type Ctx, hudStrip } from "../core/draw";
+import { buildBean } from "../core/bean";
 import { glRenderer, projectTo, renderInto } from "../core/three";
 import {
   ARENA_R, BALL_R, BH, BW, CAM_DIST, CAM_FOLLOW, CAM_HEIGHT, CAM_PITCH, CHECKER, DASH_COOLDOWN, FOV, LAVA_DROP,
@@ -109,37 +111,14 @@ function ballGeometry(color: number): THREE.BufferGeometry {
   return g;
 }
 
-/** Muñeco de bloques que va de pie sobre la bola, mirando a la cámara (+z). Pies en y = 0. */
+/** Poroto del casino de pie sobre la bola, mirando a la cámara (+z). Pies en y = 0. */
 function buildRider(color: number): { root: THREE.Group; arms: THREE.Group[] } {
-  const c = new THREE.Color(color);
-  const mat = (hex: number | THREE.Color, rough = 0.8) => new THREE.MeshStandardMaterial({ color: hex, roughness: rough });
-  const box = (s: [number, number, number], m: THREE.Material, p: [number, number, number]) => {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(...s), m);
-    mesh.position.set(...p);
-    mesh.castShadow = true;
-    return mesh;
-  };
-  const shirt = mat(c.clone().multiplyScalar(0.85)), skin = mat(0xf0c8a0), pants = mat(0x2a2a3a), dark = mat(0x1c1c24);
+  const bean = buildBean(color);
+  bean.root.scale.setScalar(0.72);
+  bean.root.rotation.y = Math.PI;
   const root = new THREE.Group();
-  root.add(
-    box([0.16, 0.42, 0.18], pants, [-0.11, 0.21, 0]),
-    box([0.16, 0.42, 0.18], pants, [0.11, 0.21, 0]),
-    box([0.46, 0.46, 0.28], shirt, [0, 0.65, 0]),
-    box([0.34, 0.34, 0.32], skin, [0, 1.06, 0]),
-    box([0.38, 0.1, 0.36], mat(color), [0, 1.27, 0]),
-    box([0.3, 0.04, 0.16], mat(color), [0, 1.23, 0.24]),
-    box([0.05, 0.06, 0.02], dark, [-0.08, 1.08, 0.165]),
-    box([0.05, 0.06, 0.02], dark, [0.08, 1.08, 0.165]),
-  );
-  // Brazos abiertos para mantener el equilibrio (giran en el hombro).
-  const arms = [-1, 1].map((s) => {
-    const pivot = new THREE.Group();
-    pivot.position.set(s * 0.23, 0.82, 0);
-    pivot.add(box([0.38, 0.11, 0.11], shirt, [s * 0.19, 0, 0]));
-    root.add(pivot);
-    return pivot;
-  });
-  return { root, arms };
+  root.add(bean.root);
+  return { root, arms: bean.arms };
 }
 
 interface Tile {
@@ -341,8 +320,8 @@ class Stage {
       const tilt = Math.max(-0.3, Math.min(0.3, (b.vy / MAX_SPEED) * 0.3));
       p.rider.rotation.set(tilt, 0, -lean);
       const wave = Math.sin(time * 9 + b.index) * 0.35;
-      p.arms[0].rotation.z = -0.3 + wave;
-      p.arms[1].rotation.z = 0.3 + wave;
+      p.arms[0].rotation.z = -0.9 + wave;
+      p.arms[1].rotation.z = 0.9 + wave;
     }
 
     // --- Partículas ---
@@ -451,20 +430,21 @@ export class BallsRenderer {
 
   // --- HUD ---
   private drawHud(ctx: Ctx, v: BallsView) {
+    hudStrip(ctx, BW, 28);
     // Tiempo restante en un recuadro, arriba a la izquierda.
     const left = Math.max(0, Math.ceil(ROUND_TIME - v.time));
-    panel(ctx, 4, 4, 26, 22, left <= 10 ? [255, 90, 80] : [255, 207, 80], 0.8);
+    panel(ctx, 4, 4, 26, 22, left <= 10 ? C_LOSE : C_GOLD, 0.8);
     titleText(ctx, String(left), 17, 15, left <= 10 ? [255, 120, 100] : [255, 255, 255], "12px", "center", "middle");
 
     const alive = v.balls.filter((b) => b.state === 0).length;
-    shadowText(ctx, `EN PIE ${alive}/${v.balls.length}`, BW - 5, 5, [255, 220, 60], SMALL, "right");
+    shadowText(ctx, `EN PIE ${alive}/${v.balls.length}`, BW - 5, 5, C_GOLD, SMALL, "right");
     // Victorias acumuladas
     v.balls.forEach((_, i) => {
       const w = v.wins[i] ?? 0;
       const y = 17 + i * 9;
       badge(ctx, BW - 40, y + 3.5, 3.5, PLAYER_COLORS[i], String(i + 1));
-      shadowText(ctx, `★${w}`, BW - 5, y, [255, 220, 60], TINY, "right");
-      if (i === v.me) shadowText(ctx, "TÚ", BW - 34, y, [235, 235, 245], TINY);
+      shadowText(ctx, `★${w}`, BW - 5, y, C_GOLD, TINY, "right");
+      if (i === v.me) shadowText(ctx, "TÚ", BW - 34, y, C_TEXT, TINY);
     });
 
     const me = v.balls[v.me];
@@ -474,15 +454,15 @@ export class BallsRenderer {
       const ready = k >= 1;
       segmentBar(ctx, 6, BH - 22, 44, 5, k, ready ? PLAYER_COLORS[v.me] : [200, 200, 210], 8);
       const blink = !ready || Math.floor(this.time * 3) % 2 === 0;
-      if (blink) shadowText(ctx, ready ? "EMBESTIDA ¡LISTA!" : "EMBESTIDA", 5, BH - 31, ready ? [255, 230, 90] : [235, 235, 245], TINY);
+      if (blink) shadowText(ctx, ready ? "EMBESTIDA ¡LISTA!" : "EMBESTIDA", 5, BH - 31, ready ? [255, 230, 90] : C_TEXT, TINY);
     }
 
     // Encima del texto de ayuda para no pisarse en pantallas estrechas.
-    if (v.netLabel) shadowText(ctx, v.netLabel, BW - 4, BH - 20, [200, 200, 220], TINY, "right");
-    if (v.footer && !v.results) shadowText(ctx, v.footer, BW / 2, BH - 10, [235, 235, 245], TINY, "center");
+    if (v.netLabel) shadowText(ctx, v.netLabel, BW - 4, BH - 20, C_DIM, TINY, "right");
+    if (v.footer && !v.results) shadowText(ctx, v.footer, BW / 2, BH - 10, C_TEXT, TINY, "center");
 
     if (v.phase === 0) {
-      titleText(ctx, String(Math.ceil(v.countdown)), BW / 2, 66, [255, 230, 80], "40px");
+      titleText(ctx, String(Math.ceil(v.countdown)), BW / 2, 66, C_GOLD, "40px");
     } else if (v.phase === 1 && v.time < 0.8) {
       titleText(ctx, "¡YA!", BW / 2, 70, [120, 255, 120], "32px");
     } else if (v.phase === 1 && v.time > SHRINK_START && v.time < SHRINK_START + 2.5) {
@@ -504,19 +484,19 @@ export class BallsRenderer {
     const title = solo
       ? (v.balls[0].state === 0 ? "¡AGUANTASTE!" : `AGUANTASTE ${Math.floor(v.time)} s`)
       : winners.length === 1 ? `¡GANA ${ballName(winners[0].index, winners[0].ai).toUpperCase()}!` : "¡EMPATE!";
-    const titleColor: RGB = winners.length === 1 && !solo ? PLAYER_COLORS[winners[0].index] : [235, 235, 245];
-    panel(ctx, 20, 40, BW - 40, 46 + res.length * 16, [255, 61, 139], 0.85);
+    const titleColor: RGB = winners.length === 1 && !solo ? PLAYER_COLORS[winners[0].index] : C_TEXT;
+    panel(ctx, 20, 40, BW - 40, 46 + res.length * 16, C_LINE, 0.85);
     titleText(ctx, title, BW / 2, 46, titleColor, MID);
-    text(ctx, "Victorias", BW - 30, 63, [170, 170, 190], TINY, "right");
+    text(ctx, "Victorias", BW - 30, 63, C_DIM, TINY, "right");
     res.forEach((r, i) => {
       const y = 72 + i * 16;
       const color = PLAYER_COLORS[r.index];
       badge(ctx, 36, y + 4.5, 5, color, String(r.index + 1));
       text(ctx, `${r.place}º`, 46, y, [255, 255, 255], MID);
       text(ctx, ballName(r.index, r.ai) + (r.index === v.me ? " (tú)" : ""), 66, y, color, MID);
-      text(ctx, String(v.wins[r.index] ?? 0), BW - 30, y, [255, 220, 60], MID, "right");
+      text(ctx, String(v.wins[r.index] ?? 0), BW - 30, y, C_GOLD, MID, "right");
     });
     const lit = Math.floor(this.time * 2) % 2 === 0; // parpadea como un "PULSA START"
-    text(ctx, fitText(ctx, v.footer, BW - 48, TINY), BW / 2, 77 + res.length * 16, lit ? [255, 236, 190] : [140, 130, 105], TINY, "center");
+    text(ctx, fitText(ctx, v.footer, BW - 48, TINY), BW / 2, 77 + res.length * 16, lit ? C_TEXT : C_MUTE, TINY, "center");
   }
 }

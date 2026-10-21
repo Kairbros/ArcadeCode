@@ -5,9 +5,11 @@
 // jugadores) se dibuja en 2D encima. Día y noche: la luz del cielo horneada se multiplica en el shader por la luz
 // del día (`daySky`), sin rehacer mallas; el cielo cambia de color y el sol, la luna y las estrellas giran.
 // Coordenadas: 1 unidad = 1 bloque; x, z en el suelo e y hacia arriba (igual que el mundo).
+import { buildBean } from "../core/bean";
+import { C_DIM, C_MUTE, C_TEXT } from "../core/theme";
 import * as THREE from "three";
 import { PLAYER_COLORS, PLAYER_NAMES } from "../core/config";
-import { badge, fitText, panel, shadowText, text, titleText, type Ctx } from "../core/draw";
+import { badge, fitText, panel, shadowText, text, titleText, type Ctx, hudStrip } from "../core/draw";
 import { disposeScene, glRenderer, projectTo, renderInto } from "../core/three";
 import { atlasCanvas, crackCanvas, CRACK_STAGES } from "./atlas";
 import { ATLAS_COLS, ATLAS_ROWS, BLOCKS, HOTBAR, WATER } from "./blocks";
@@ -150,39 +152,13 @@ interface Person {
   stride: number;
 }
 
-/** Muñeco de bloques (cabeza, cuerpo, brazos y piernas que giran en hombros y caderas). Pies en y = 0, mirando a −z. */
+/** Poroto del casino (cabeza, cuerpo, brazos y piernas que giran en hombros y caderas). Pies en y = 0, mirando a −z. */
 function buildPerson(color: number, blockMat: THREE.Material): Person {
   const mats: THREE.MeshLambertMaterial[] = [];
-  const mat = (hex: number) => litMaterial(hex, mats);
-  const box = (s: [number, number, number], m: THREE.Material, p: [number, number, number]) => {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(...s), m);
-    mesh.position.set(...p);
-    return mesh;
-  };
-  const shirt = mat(color), skin = mat(0xe8b890), pants = mat(0x34345a), hair = mat(0x3a2818), dark = mat(0x1c1c24);
-  const root = new THREE.Group();
-  root.add(box([0.5, 0.72, 0.26], shirt, [0, 1.11, 0]));
-  const head = new THREE.Group();
-  head.position.set(0, 1.47, 0);
-  head.add(
-    box([0.5, 0.5, 0.5], skin, [0, 0.25, 0]),
-    box([0.52, 0.14, 0.52], hair, [0, 0.46, 0.01]),
-    box([0.08, 0.08, 0.02], dark, [-0.11, 0.26, -0.255]),
-    box([0.08, 0.08, 0.02], dark, [0.11, 0.26, -0.255]),
-  );
-  root.add(head);
-  const limb = (x: number, y: number, m: THREE.Material) => {
-    const pivot = new THREE.Group();
-    pivot.position.set(x, y, 0);
-    pivot.add(box([0.24, 0.72, 0.24], m, [0, -0.36, 0]));
-    root.add(pivot);
-    return pivot;
-  };
-  const arms = [limb(-0.37, 1.46, shirt), limb(0.37, 1.46, shirt)];
-  const legs = [limb(-0.13, 0.75, pants), limb(0.13, 0.75, pants)];
-  // Bloque en la mano derecha (un cubito con la textura del bloque elegido).
+  const { root, head, arms, legs } = buildBean(color, (hex) => litMaterial(hex, mats));
+  // Bloque en el guante derecho (un cubito con la textura del bloque elegido).
   const held = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.22), blockMat);
-  held.position.set(0, -0.72, -0.12);
+  held.position.set(0, -0.64, -0.14);
   arms[1].add(held);
   return { root, mats, head, arms, legs, held, last: [0, 0], stride: 0 };
 }
@@ -802,7 +778,7 @@ export class BlocksRenderer {
       if (!p || p[2] > 40) continue;
       const [x, y] = p;
       badge(ctx, x - 1, y, 4, PLAYER_COLORS[a.index], String(a.index + 1));
-      shadowText(ctx, fitText(ctx, PLAYER_NAMES[a.index], 60, TINY), x + 5, y - 3, [235, 235, 245], TINY);
+      shadowText(ctx, fitText(ctx, PLAYER_NAMES[a.index], 60, TINY), x + 5, y - 3, C_TEXT, TINY);
     }
   }
 
@@ -840,6 +816,7 @@ export class BlocksRenderer {
   }
 
   private drawHud(ctx: Ctx, v: BlocksView, loading: number) {
+    hudStrip(ctx, VW, 14);
     const dead = v.deadFor >= 0;
     // Cruz en el centro.
     if (!dead) {
@@ -861,7 +838,7 @@ export class BlocksRenderer {
     // Barra: los bloques fijos (creativo) o las 9 primeras ranuras del inventario (supervivencia).
     const n = HOTBAR.length, cell = 18, w = n * cell + 4;
     const x0 = (VW - w) / 2, y0 = VH - cell - 6;
-    panel(ctx, x0, y0, w, cell + 4, [120, 120, 140], 0.7);
+    panel(ctx, x0, y0, w, cell + 4, C_MUTE, 0.7);
     HOTBAR.forEach((b, i) => {
       const cx = x0 + 2 + i * cell + cell / 2, cy = y0 + 2 + cell / 2;
       const s = v.inventory.slots[i];
@@ -884,16 +861,16 @@ export class BlocksRenderer {
     if (this.time - this.slotShownAt < 1.6 && v.held && !v.crafter) shadowText(ctx, itemInfo(v.held).name, VW / 2, top - 10, [255, 255, 255], SMALL, "center");
 
     // Posición y modo, arriba a la izquierda; jugadores a la derecha.
-    shadowText(ctx, `X ${Math.floor(v.x)}  Y ${Math.floor(v.y)}  Z ${Math.floor(v.z)}${v.flying ? "  · VOLANDO" : ""}`, 4, 4, [235, 235, 245], TINY);
+    shadowText(ctx, `X ${Math.floor(v.x)}  Y ${Math.floor(v.y)}  Z ${Math.floor(v.z)}${v.flying ? "  · VOLANDO" : ""}`, 4, 4, C_TEXT, TINY);
     const players = [{ index: v.me }, ...v.others].sort((a, b) => a.index - b.index);
     players.forEach((p, i) => {
       const y = 4 + i * 9;
       badge(ctx, VW - 8, y + 3.5, 3.5, PLAYER_COLORS[p.index], String(p.index + 1));
       const name = PLAYER_NAMES[p.index] + (p.index === v.me ? " (tú)" : "");
-      shadowText(ctx, fitText(ctx, name, 80, TINY), VW - 14, y, [235, 235, 245], TINY, "right");
+      shadowText(ctx, fitText(ctx, name, 80, TINY), VW - 14, y, C_TEXT, TINY, "right");
     });
 
-    if (v.netLabel) shadowText(ctx, v.netLabel, VW - 4, 6 + players.length * 9, [200, 200, 220], TINY, "right");
+    if (v.netLabel) shadowText(ctx, v.netLabel, VW - 4, 6 + players.length * 9, C_DIM, TINY, "right");
     if (v.time < 12) {
       shadowText(ctx, v.survival ? SURVIVAL_HINT_1 : BLOCKS_HINT_1, VW / 2, 18, [255, 255, 255], TINY, "center");
       shadowText(ctx, v.survival ? SURVIVAL_HINT_2 : BLOCKS_HINT_2, VW / 2, 27, [255, 255, 255], TINY, "center");

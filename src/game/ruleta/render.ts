@@ -2,9 +2,10 @@
 // con la lámpara como única luz fuerte (con sombras), y un HUD 2D encima. Todo se calcula a partir
 // del estado de la mesa (RuletaSnap) y del tiempo del último evento, igual en anfitrión e invitado.
 // La escena se dibuja en un lienzo WebGL aparte y se copia al lienzo del juego.
+import { C_BG, C_DIM, C_GOLD, C_LINE, C_MUTE, C_TEXT } from "../core/theme";
 import * as THREE from "three";
 import { PLAYER_COLORS } from "../core/config";
-import { badge, css, fillCircle, fitText, fitTitle, panel, polygon, shadowText, strokeCircle, text, textWidth, titleText, type Ctx } from "../core/draw";
+import { badge, css, fillCircle, fitText, fitTitle, panel, polygon, shadowText, strokeCircle, text, textWidth, titleText, type Ctx, hudStrip } from "../core/draw";
 import {
   CUT_AT, EV_ITEM, EV_NONE, EV_SHOT, I_BEER, I_CIGS, I_CUFFS, I_INVERTER, I_LUPA, I_MEDS, I_PHONE, I_SAW, ITEM_HIT,
   ITEM_TIME, ITEMS, PH_INTRO, PH_OVER, PH_REVEAL, PH_ROUND_END, PH_TURN, REVEAL_TIME, ROUNDS, RH, RW, SHOT_HIT,
@@ -525,8 +526,8 @@ export class RuletaRenderer {
       if (!top) continue;
       const [x, y] = top;
       badge(ctx, x, y - 2, 4, isOut(s, i) ? [90, 90, 96] : PLAYER_COLORS[i], String(i + 1));
-      shadowText(ctx, seatName(s, i), x, y - 13, isOut(s, i) ? [150, 150, 160] : [235, 235, 245], TINY, "center");
-      if (s.ph === PH_TURN && s.tu === i) polygon(ctx, [[x - 3, y - 22], [x + 3, y - 22], [x, y - 18]], [255, 220, 60]);
+      shadowText(ctx, seatName(s, i), x, y - 13, isOut(s, i) ? [150, 150, 160] : C_TEXT, TINY, "center");
+      if (s.ph === PH_TURN && s.tu === i) polygon(ctx, [[x - 3, y - 22], [x + 3, y - 22], [x, y - 18]], C_GOLD);
       if (v.focus.kind === "seat" && v.focus.seat === i) {
         const h = stage.project(head(i));
         const big = i === s.dl ? DEALER_SCALE : 1;
@@ -547,6 +548,7 @@ export class RuletaRenderer {
   // --- HUD ---
 
   private drawHud(ctx: Ctx, v: RuletaView) {
+    hudStrip(ctx, RW, 26);
     const { s, me } = v;
     const n = s.p.length;
     const rule = ROUNDS[s.rd];
@@ -559,12 +561,12 @@ export class RuletaRenderer {
       const turn = s.ph === PH_TURN && s.tu === i;
       // El panel de quien tiene el turno se enciende y parpadea su borde.
       const lit = turn && Math.floor(this.time * 3) % 2 === 0;
-      panel(ctx, x, 2, pw - 2, 22, turn ? (lit ? [255, 215, 60] : [195, 148, 35]) : out ? [70, 60, 80] : [148, 118, 42], 0.9,
-        turn ? [38, 22, 6] : [15, 8, 24]);
+      panel(ctx, x, 2, pw - 2, 22, turn ? (lit ? [255, 215, 60] : [195, 148, 35]) : out ? [70, 60, 80] : C_MUTE, 0.9,
+        turn ? [38, 22, 6] : C_BG);
       badge(ctx, x + 7.5, 9, 4.5, out ? [90, 90, 96] : PLAYER_COLORS[i], String(i + 1));
       const name = fitText(ctx, seatName(s, i) + (i === me ? " (tú)" : ""), pw - 34, TINY);
-      text(ctx, name, x + 14, 4, out ? [150, 150, 160] : [235, 235, 245], TINY);
-      text(ctx, `★${row[P_WINS]}`, x + pw - 5, 4, [255, 220, 60], TINY, "right");
+      text(ctx, name, x + 14, 4, out ? [150, 150, 160] : C_TEXT, TINY);
+      text(ctx, `★${row[P_WINS]}`, x + pw - 5, 4, C_GOLD, TINY, "right");
       for (let k = 0; k < row[P_MAX]; k++) bolt(ctx, x + 14 + k * 7, 13, k < row[P_LIVES]);
       const status = out ? "FUERA" : row[P_CUFF] === 1 ? "ESPOSADO" : rule.cut && row[P_LIVES] <= CUT_AT ? "SIN CURAS" : "";
       if (status) text(ctx, status, x + pw - 5, 15, out ? [200, 120, 110] : [255, 160, 90], TINY, "right");
@@ -587,7 +589,7 @@ export class RuletaRenderer {
     if (s.ph === PH_INTRO) {
       const k = ease(s.pt / 0.4);
       ctx.globalAlpha = k;
-      panel(ctx, -2, 60, RW + 4, 56, [198, 158, 38], 0.9, [20, 8, 32]);
+      panel(ctx, -2, 60, RW + 4, 56, C_LINE, 0.9, C_BG);
       ctx.globalAlpha = 1;
       titleText(ctx, `RONDA ${s.rd + 1}`, RW / 2, 64, [255, 218, 75], BIG);
       const extra = rule.items ? `${rule.items} objetos por carga` : "sin objetos";
@@ -599,14 +601,14 @@ export class RuletaRenderer {
       const b = `${bl} DE FOGUEO`;
       const wa = textWidth(ctx, a, MID), wb = textWidth(ctx, b, MID), gap = 16;
       const x0 = RW / 2 - (wa + wb + gap) / 2;
-      panel(ctx, x0 - 8, 35, wa + wb + gap + 16, 20, [198, 162, 42], 0.92, [20, 8, 32]);
+      panel(ctx, x0 - 8, 35, wa + wb + gap + 16, 20, C_LINE, 0.92, C_BG);
       shadowText(ctx, a, x0, 40, [255, 75, 75], MID);
       shadowText(ctx, "·", x0 + wa + gap / 2, 40, [198, 172, 95], MID, "center");
       shadowText(ctx, b, x0 + wa + gap, 40, [105, 175, 255], MID);
     } else if (s.ph === PH_ROUND_END) {
       const w = s.rw;
       const title = w < 0 ? "RONDA SIN GANADOR" : w === me ? "¡GANAS LA RONDA!" : `${seatName(s, w).toUpperCase()} GANA LA RONDA`;
-      panel(ctx, -2, 68, RW + 4, 38, w >= 0 ? PLAYER_COLORS[w] : [198, 162, 42], 0.85, [15, 8, 22]);
+      panel(ctx, -2, 68, RW + 4, 38, w >= 0 ? PLAYER_COLORS[w] : C_LINE, 0.85, C_BG);
       titleText(ctx, fitTitle(ctx, title, RW - 12, "14px"), RW / 2, 74, w >= 0 ? PLAYER_COLORS[w] : [255, 215, 70], "14px");
       if (s.rd + 1 < ROUNDS.length) shadowText(ctx, "Siguiente ronda...", RW / 2, 94, [185, 170, 220], TINY, "center");
     } else if (s.ph === PH_OVER) {
@@ -627,16 +629,16 @@ export class RuletaRenderer {
       known.push(kn[k] === 1 ? `Recámara: ${what}` : `${kn[k]}º cartucho: ${what}`);
     }
     if (known.length && s.ph === PH_TURN) shadowText(ctx, `Sabes: ${known.join(" · ")}`, 4, RH - 36, [170, 230, 180], TINY);
-    if (v.netLabel) shadowText(ctx, v.netLabel, RW - 4, RH - 36, [190, 190, 210], TINY, "right");
+    if (v.netLabel) shadowText(ctx, v.netLabel, RW - 4, RH - 36, C_DIM, TINY, "right");
 
     // Barra inferior: tu selección, o de quién es el turno.
-    panel(ctx, -2, RH - 27, RW + 4, 29, [198, 162, 42], 0.94, [15, 8, 22]);
+    panel(ctx, -2, RH - 27, RW + 4, 29, C_LINE, 0.94, C_BG);
     let line1 = v.label, line2 = v.hint;
     if (!line1 && s.ph === PH_TURN) {
       line1 = s.tu === me ? (s.bz ? "..." : "Tu turno") : `Turno de ${seatName(s, s.tu)}`;
     }
     if (v.footer) line2 = v.footer;
-    if (line1) shadowText(ctx, fitText(ctx, line1, RW - 8, SMALL), RW / 2, RH - 23, [255, 236, 190], SMALL, "center");
+    if (line1) shadowText(ctx, fitText(ctx, line1, RW - 8, SMALL), RW / 2, RH - 23, C_TEXT, SMALL, "center");
     if (line2) text(ctx, fitText(ctx, line2, RW - 8, TINY), RW / 2, RH - 11, [210, 210, 225], TINY, "center");
   }
 
@@ -647,16 +649,16 @@ export class RuletaRenderer {
     const winners = order.filter((o) => o.w === best);
     const title = winners.length > 1 ? "¡EMPATE!" : winners[0].i === me ? "¡HAS GANADO LA PARTIDA!" : `¡GANA ${seatName(s, winners[0].i).toUpperCase()}!`;
     const top = 38;
-    panel(ctx, 40, top, RW - 80, 34 + order.length * 14, [198, 158, 38], 0.92, [18, 8, 28]);
+    panel(ctx, 40, top, RW - 80, 34 + order.length * 14, C_LINE, 0.92, C_BG);
     titleText(ctx, fitTitle(ctx, title, RW - 90, MID), RW / 2, top + 5, winners.length === 1 ? PLAYER_COLORS[winners[0].i] : [255, 215, 70], MID);
-    text(ctx, "Rondas", RW - 50, top + 20, [170, 170, 190], TINY, "right");
+    text(ctx, "Rondas", RW - 50, top + 20, C_DIM, TINY, "right");
     order.forEach((o, k) => {
       const y = top + 28 + k * 14;
       const place = 1 + order.filter((x) => x.w > o.w).length;
       badge(ctx, 56, y + 4, 4, PLAYER_COLORS[o.i], String(o.i + 1));
       text(ctx, `${place}º`, 64, y, [255, 255, 255], MID);
       text(ctx, seatName(s, o.i) + (o.i === me ? " (tú)" : ""), 82, y, PLAYER_COLORS[o.i], MID);
-      text(ctx, String(o.w), RW - 50, y, [255, 220, 60], MID, "right");
+      text(ctx, String(o.w), RW - 50, y, C_GOLD, MID, "right");
     });
   }
 }

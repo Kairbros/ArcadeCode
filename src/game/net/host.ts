@@ -185,6 +185,7 @@ export class HostSession {
     this.seqOffset = this.lastSeq;
     this.baseOffset = this.lastBase;
     this.lastFrame = null;
+    this.game?.dispose?.();
     const game = createHostGame(id, this.keyboard, this.peers.length);
     // Quien se fue sigue fuera en el juego nuevo.
     for (const p of this.peers) if (!p.connected) game.onDisconnect(p.index);

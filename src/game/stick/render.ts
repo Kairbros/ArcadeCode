@@ -1,9 +1,9 @@
 // Render de Monigotes: escenario lateral fijo y luchadores dibujados con líneas. Las poses
 // (correr, saltar, golpear, aturdido, inerte) se calculan a partir del estado: no hay sprites.
+import { C_DIM, C_GOLD, C_LINE, C_MUTE, C_TEXT } from "../core/theme";
 import { PLAYER_COLORS, PLAYER_NAMES, type RGB } from "../core/config";
 import {
-  badge, css, fillCircle, fitText, panel, roundRect, segmentBar, shade, shadowText, text, titleText, type Ctx,
-} from "../core/draw";
+  badge, css, fillCircle, fillRect, fitText, line, panel, roundRect, segmentBar, shade, shadowText, text, titleText, type Ctx, hudStrip } from "../core/draw";
 import {
   ATTACK_ANIM, BOMB_FUSE, BOMB_RADIUS, EXPLOSION_TIME, HP, ROUND_TIME, SH, SW, W_BOMB, W_PISTOL, W_SWORD,
   type Weapon,
@@ -169,34 +169,67 @@ export class StickRenderer {
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.lineWidth = 2.2;
-    const limb = (a: [number, number], b: [number, number], c: [number, number]) => {
+    // Poroto del casino: piernas oscuras con piececitos, brazos del color del jugador con guante,
+    // cuerpo de cápsula, ojos saltones y bombín. Lo de atrás, un poco más oscuro.
+    const legInk: RGB = f.dead ? [30, 10, 20] : [42, 14, 28];
+    const glove: RGB = f.dead ? [150, 142, 130] : [255, 242, 220];
+    const limb = (a: [number, number], b: [number, number], c: [number, number], k: number, cl: RGB, width: number) => {
+      ctx.strokeStyle = css(shade(cl, k));
+      ctx.lineWidth = width;
       ctx.beginPath();
       ctx.moveTo(a[0], a[1]);
       ctx.lineTo(b[0], b[1]);
       ctx.lineTo(c[0], c[1]);
       ctx.stroke();
     };
-    // Pierna y brazo traseros algo más oscuros para dar profundidad.
-    ctx.strokeStyle = css(shade(ink, 0.7));
-    limb(pose.hip, pose.kneeB, pose.footB);
-    limb(pose.shoulder, pose.elbowB, pose.handB);
-    ctx.strokeStyle = css(ink);
+    const foot = (p: [number, number], k: number) => {
+      ctx.fillStyle = css(shade(legInk, k));
+      ctx.beginPath();
+      ctx.ellipse(p[0] + 1.4, p[1], 3, 1.8, 0, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    const mitt = (p: [number, number], k: number) => fillCircle(ctx, p[0], p[1], 2, shade(glove, k));
+    limb(pose.hip, pose.kneeB, pose.footB, 0.7, legInk, 3);
+    foot(pose.footB, 0.7);
+    limb(pose.shoulder, pose.elbowB, pose.handB, 0.7, ink, 2.2);
+    mitt(pose.handB, 0.75);
+    limb(pose.hip, pose.kneeF, pose.footF, 1, legInk, 3);
+    foot(pose.footF, 1);
+    // Cuerpo: cápsula del hombro a la cadera, con un brillo.
+    ctx.fillStyle = css(ink);
     ctx.beginPath();
-    ctx.moveTo(pose.hip[0], pose.hip[1]);
-    ctx.lineTo(pose.neck[0], pose.neck[1]);
-    ctx.stroke();
-    limb(pose.hip, pose.kneeF, pose.footF);
+    ctx.roundRect(-5.5, pose.neck[1] - 1, 11, pose.hip[1] - pose.neck[1] + 6, 5.5);
+    ctx.fill();
+    ctx.fillStyle = css(shade(ink, 1.35));
+    ctx.fillRect(-3.4, pose.neck[1] + 3, 1.4, 6);
     this.drawWeapon(ctx, f, pose);
-    limb(pose.shoulder, pose.elbowF, pose.handF);
-    fillCircle(ctx, pose.head[0], pose.head[1], 4.2, ink);
+    limb(pose.shoulder, pose.elbowF, pose.handF, 1, ink, 2.2);
+    mitt(pose.handF, 1);
+    // Cabeza: ojos saltones mirando al frente, ceja y bombín.
+    const [hx, hy] = pose.head;
+    fillCircle(ctx, hx, hy, 5, ink);
     if (!f.dead) {
-      // Ojo mirando al frente
-      fillCircle(ctx, pose.head[0] + 1.6, pose.head[1] - 0.6, 0.9, [20, 20, 28]);
+      for (const dx of [0.8, 3.6]) {
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.ellipse(hx + dx, hy - 0.4, 1.9, 2.3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        fillCircle(ctx, hx + dx + 0.8, hy - 0.2, 0.95, [20, 16, 24]);
+      }
+      line(ctx, hx + 0.2, hy - 3.4, hx + 4.8, hy - 3, [42, 14, 28], 0.9);
+    } else {
+      line(ctx, hx + 0.4, hy - 1.6, hx + 2.4, hy + 0.4, [20, 16, 24], 0.9);
+      line(ctx, hx + 2.4, hy - 1.6, hx + 0.4, hy + 0.4, [20, 16, 24], 0.9);
+      line(ctx, hx + 3.2, hy - 1.6, hx + 5.2, hy + 0.4, [20, 16, 24], 0.9);
+      line(ctx, hx + 5.2, hy - 1.6, hx + 3.2, hy + 0.4, [20, 16, 24], 0.9);
     }
+    fillRect(ctx, hx - 6.2, hy - 4.6, 12.4, 1.6, [42, 14, 28]);
+    fillRect(ctx, hx - 3.6, hy - 8.6, 7.2, 4.4, [42, 14, 28]);
+    fillRect(ctx, hx - 3.6, hy - 5.8, 7.2, 1.1, [255, 242, 220]);
     ctx.restore();
     if (!f.dead) {
       // Número sobre la cabeza (identifica también en escala de grises) y marca propia.
-      const ty = f.y - 38;
+      const ty = f.y - 47;
       shadowText(ctx, String(f.index + 1), f.x, ty, [255, 255, 255], "7px", "center", "middle");
       if (mine) {
         ctx.fillStyle = "#fff";
@@ -240,6 +273,7 @@ export class StickRenderer {
 
   // --- HUD ---
   private drawHud(ctx: Ctx, v: StickView) {
+    hudStrip(ctx, SW, 22);
     // Paneles de vida, uno por luchador, como en las recreativas de lucha.
     const n = v.fighters.length;
     const pw = Math.min(78, (SW - 8) / n);
@@ -249,8 +283,8 @@ export class StickRenderer {
       panel(ctx, x, 2, pw - 4, 18, f.dead ? [90, 90, 100] : color, 0.6);
       badge(ctx, x + 6.5, 11, 4, f.dead ? [110, 110, 120] : color, String(f.index + 1));
       const name = fighterName(f.index, v.aiSlots[i]) + (f.index === v.me ? " (tú)" : "");
-      text(ctx, fitText(ctx, name, pw - 34, TINY), x + 13, 3.5, f.dead ? [150, 150, 160] : [235, 235, 245], TINY);
-      text(ctx, `★${v.wins[f.index] ?? 0}`, x + pw - 7, 3.5, [255, 220, 60], TINY, "right");
+      text(ctx, fitText(ctx, name, pw - 34, TINY), x + 13, 3.5, f.dead ? [150, 150, 160] : C_TEXT, TINY);
+      text(ctx, `★${v.wins[f.index] ?? 0}`, x + pw - 7, 3.5, C_GOLD, TINY, "right");
       const k = Math.max(0, f.hp) / HP;
       const hpColor: RGB = f.dead ? [120, 120, 120] : k > 0.5 ? [110, 220, 110] : k > 0.25 ? [250, 200, 70] : [240, 80, 70];
       segmentBar(ctx, x + 13, 12, pw - 21, 4, k, hpColor, 10);
@@ -258,11 +292,11 @@ export class StickRenderer {
     const left = Math.max(0, Math.ceil(ROUND_TIME - v.time));
     titleText(ctx, String(left), SW / 2, 22, left <= 10 ? [255, 120, 100] : [255, 255, 255], "10px");
 
-    if (v.netLabel) shadowText(ctx, v.netLabel, SW - 3, SH - 17, [200, 200, 220], TINY, "right");
-    if (v.footer && !v.results) shadowText(ctx, v.footer, SW / 2, SH - 9, [235, 235, 245], TINY, "center");
+    if (v.netLabel) shadowText(ctx, v.netLabel, SW - 3, SH - 17, C_DIM, TINY, "right");
+    if (v.footer && !v.results) shadowText(ctx, v.footer, SW / 2, SH - 9, C_TEXT, TINY, "center");
 
     if (v.phase === 0) {
-      titleText(ctx, String(Math.ceil(v.countdown)), SW / 2, 58, [255, 230, 80], "36px");
+      titleText(ctx, String(Math.ceil(v.countdown)), SW / 2, 58, C_GOLD, "36px");
     } else if (v.phase === 1 && v.time < 0.8) {
       titleText(ctx, "¡A PELEAR!", SW / 2, 64, [120, 255, 120], "22px");
     }
@@ -270,7 +304,7 @@ export class StickRenderer {
     if (me?.dead && !v.results) shadowText(ctx, "K.O. · mirando", SW / 2, 34, [255, 140, 80], SMALL, "center");
     if (me && !me.dead && me.weapon) {
       const label = me.weapon === W_SWORD ? "Espada" : me.weapon === W_PISTOL ? `Pistola ${me.ammo}` : `Bombas ${me.ammo}`;
-      shadowText(ctx, label, 4, SH - 17, [235, 235, 245], TINY);
+      shadowText(ctx, label, 4, SH - 17, C_TEXT, TINY);
     }
     if (v.results) this.drawResults(ctx, v);
   }
@@ -282,21 +316,21 @@ export class StickRenderer {
     const title = solo
       ? (v.fighters[0].dead ? `AGUANTASTE ${Math.floor(v.time)} s` : "¡AGUANTASTE!")
       : winners.length === 1 ? `¡GANA ${fighterName(winners[0].index, winners[0].ai).toUpperCase()}!` : "¡EMPATE!";
-    const titleColor: RGB = winners.length === 1 && !solo ? PLAYER_COLORS[winners[0].index] : [235, 235, 245];
+    const titleColor: RGB = winners.length === 1 && !solo ? PLAYER_COLORS[winners[0].index] : C_TEXT;
     const top = 40;
-    panel(ctx, 50, top, SW - 100, 40 + res.length * 14, [255, 61, 139], 0.85);
+    panel(ctx, 50, top, SW - 100, 40 + res.length * 14, C_LINE, 0.85);
     titleText(ctx, title, SW / 2, top + 5, titleColor, MID);
-    text(ctx, "Victorias", SW - 60, top + 20, [170, 170, 190], TINY, "right");
+    text(ctx, "Victorias", SW - 60, top + 20, C_DIM, TINY, "right");
     res.forEach((r, i) => {
       const y = top + 28 + i * 14;
       const color = PLAYER_COLORS[r.index];
       badge(ctx, 64, y + 4, 4, color, String(r.index + 1));
       text(ctx, `${r.place}º`, 72, y, [255, 255, 255], MID);
       text(ctx, fighterName(r.index, r.ai) + (r.index === v.me ? " (tú)" : ""), 90, y, color, MID);
-      text(ctx, String(v.wins[r.index] ?? 0), SW - 60, y, [255, 220, 60], MID, "right");
+      text(ctx, String(v.wins[r.index] ?? 0), SW - 60, y, C_GOLD, MID, "right");
     });
     const lit = Math.floor(this.time * 2) % 2 === 0; // parpadea como un "PULSA START"
-    text(ctx, fitText(ctx, v.footer, SW - 108, TINY), SW / 2, top + 31 + res.length * 14, lit ? [255, 236, 190] : [140, 130, 105], TINY, "center");
+    text(ctx, fitText(ctx, v.footer, SW - 108, TINY), SW / 2, top + 31 + res.length * 14, lit ? C_TEXT : C_MUTE, TINY, "center");
   }
 }
 

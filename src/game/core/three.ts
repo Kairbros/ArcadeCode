@@ -105,7 +105,7 @@ export function disposeScene(root: THREE.Object3D) {
 let glowTex: THREE.CanvasTexture | null = null;
 
 /** Halo redondo (sprite aditivo) para luces: lámparas, ojos, fogonazos, chispas. */
-export function glowSprite(color: number, size: number, opacity = 1): THREE.Sprite {
+export function glowSprite(color: number, size: number, opacity = 1, additive = true): THREE.Sprite {
   if (!glowTex) {
     const c = document.createElement("canvas");
     c.width = c.height = 64;
@@ -120,7 +120,7 @@ export function glowSprite(color: number, size: number, opacity = 1): THREE.Spri
     glowTex.colorSpace = THREE.SRGBColorSpace;
   }
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: glowTex, color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false,
+    map: glowTex, color, transparent: true, opacity, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, depthWrite: false,
   }));
   sp.scale.setScalar(size);
   return sp;

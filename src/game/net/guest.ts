@@ -201,6 +201,7 @@ export class GuestSession {
     const snap = this.pendingSnap;
     if (!snap || this.index < 0 || !isGameId(snap.g)) return;
     if (!this.game || this.game.id !== snap.g) {
+      this.game?.dispose?.();
       this.game = createGuestGame(snap.g, this.index, this.keyboard);
       this.game.netLabel = this.transport ? `Conexión ${TRANSPORT_LABEL[this.transport]}` : "";
       if (this.lastBase) this.game.onBase(this.lastBase);

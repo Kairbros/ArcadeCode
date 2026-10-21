@@ -1,5 +1,6 @@
 // Constantes de Bomberman. Reexporta las comunes para que el juego las tome de un solo sitio.
 import type { RGB } from "../core/config";
+import { C_BG, C_DIM, C_LINE, C_TEXT } from "../core/theme";
 
 export * from "../core/config";
 
@@ -41,10 +42,10 @@ export function enemiesFor(nPlayers: number): number {
 }
 
 // --- Colores ---
-export const HUD_BG: RGB = [28, 28, 40];
-export const HUD_LINE: RGB = [70, 70, 95];
-export const TEXT_COLOR: RGB = [235, 235, 245];
-export const TEXT_DIM: RGB = [150, 150, 170];
+export const HUD_BG: RGB = C_BG;
+export const HUD_LINE: RGB = C_LINE;
+export const TEXT_COLOR: RGB = C_TEXT;
+export const TEXT_DIM: RGB = C_DIM;
 
 export const FLOOR_A: RGB = [58, 138, 66];
 export const FLOOR_B: RGB = [64, 148, 72];
