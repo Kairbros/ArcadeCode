@@ -6,10 +6,10 @@
 // anfitrión es el único que tira los dados: manda el resultado y todos dibujan la misma animación.
 import { BET_STEPS, BET_TIME, MAX_SEATS, PAY_TIME, PH_BET, PH_PAY, PH_SPIN, SPIN_TIME } from "./config";
 
-export type GameKind = "ruleta" | "plinko" | "slots" | "moneda" | "dados";
+export type GameKind = "ruleta" | "plinko" | "slots" | "moneda" | "dados" | "patos";
 
 /** Juegos en el orden de las mesas. */
-export const GAMES_LIST: GameKind[] = ["ruleta", "plinko", "slots", "moneda", "dados"];
+export const GAMES_LIST: GameKind[] = ["ruleta", "plinko", "slots", "moneda", "dados", "patos"];
 
 export const GAME_TITLE: Record<GameKind, string> = {
   ruleta: "RULETA",
@@ -17,6 +17,7 @@ export const GAME_TITLE: Record<GameKind, string> = {
   slots: "TRAGAPERRAS",
   moneda: "CARA O CRUZ",
   dados: "DADOS",
+  patos: "CARRERA DE PATOS",
 };
 
 export const GAME_DESC: Record<GameKind, string> = {
@@ -25,6 +26,7 @@ export const GAME_DESC: Record<GameKind, string> = {
   slots: "Tres rodillos, una línea",
   moneda: "Cara o cruz al aire",
   dados: "Dos dados, menos/siete/más",
+  patos: "Cuatro patos, apuesta al que gana",
 };
 
 export interface Spot {
@@ -32,6 +34,9 @@ export interface Spot {
   /** Multiplicador de la casilla (0 = no se usa, apuesta única). */
   mult: number;
 }
+
+/** Lo que paga el pato ganador (cuatro patos, uno gana). */
+export const PATO_MULT = 3.5;
 
 /** Casillas de apuesta de cada juego. */
 export const SPOTS: Record<GameKind, Spot[]> = {
@@ -54,6 +59,12 @@ export const SPOTS: Record<GameKind, Spot[]> = {
     { label: "MENOS DE 7", mult: 2 },
     { label: "SIETE", mult: 5 },
     { label: "MÁS DE 7", mult: 2 },
+  ],
+  patos: [
+    { label: "PATO 1", mult: PATO_MULT },
+    { label: "PATO 2", mult: PATO_MULT },
+    { label: "PATO 3", mult: PATO_MULT },
+    { label: "PATO 4", mult: PATO_MULT },
   ],
 };
 
@@ -108,6 +119,14 @@ export function resolve(game: GameKind, rng: () => number): Outcome {
     const label = mult === 0 ? "NADA" : mult === SLOT_PAIR ? "PAREJA ×1,2" : `TRÍO ×${mult}`;
     return { data: s, label, mults: [mult] };
   }
+  if (game === "patos") {
+    // Gana uno de los cuatro; los otros números son semillas para que la carrera tenga adelantamientos.
+    const w = Math.floor(rng() * 4);
+    const mults = zero(SPOTS.patos.length);
+    mults[w] = PATO_MULT;
+    const seeds = [0, 1, 2, 3].map(() => Math.floor(rng() * 100));
+    return { data: [w, ...seeds], label: `GANA EL PATO ${w + 1}`, mults };
+  }
   if (game === "moneda") {
     const c = rng() < 0.5 ? 0 : 1; // 0 = cara, 1 = cruz
     return { data: [c], label: c === 0 ? "CARA" : "CRUZ", mults: [c === 0 ? 2 : 0, c === 1 ? 2 : 0] };
@@ -157,7 +176,7 @@ export interface CasinoSnap {
   g: "casino";
   base: number;
   seq: number;
-  /** Por jugador: X, Z, giro y mesa en la que está sentado (-1 = de pie). */
+  /** Por jugador: X, Z, giro, mesa en la que está sentado (-1 = de pie), altura del salto y piso (0/1). */
   pl: number[][];
   /** Fichas de cada jugador. */
   ch: number[];
@@ -172,10 +191,38 @@ export interface CasinoSnap {
    * o `null` si está limpio (la mayoría del tiempo).
    */
   cg: (number[] | null)[];
-  /** Monedas en el suelo: `[x, z, segundos que quedan]`. Se recogen al pasar por encima. */
+  /** Monedas en el suelo: `[x, z, segundos que quedan, piso]`. Se recogen al pasar por encima. */
   co: number[][];
   /** Segundos de condena en la cárcel del techo por jugador (0 = libre). */
   ja: number[];
+  /** Turno: `[número, segundos que quedan, cuota, fichas de todos, récord de turnos superados]`. */
+  qs?: number[];
+  /** Mesa caliente: `[índice, segundos que le quedan]`. */
+  ht?: number[];
+  /** Trucos de cada jugador: `[objeto en la mano, segundos de imán, dado cargado 1/0]`. */
+  it?: number[][];
+  /** Cáscaras de banana en el suelo: `[x, z, piso]`. */
+  bn?: number[][];
+  /** Cartel de fin de turno: `[1 cumplida / 2 fallada, segundos que quedan]` o vacío. */
+  ev?: number[];
+  /** NPC (crupieres en el orden de las mesas y el guardia al final): `[x, z, giro, estado, objetivo, en el suelo 1/0]`. */
+  np?: number[][];
+  /** Fuga: progreso (0..1) de cada jugador forzando la caja de la jaula (0 = no). */
+  jb?: number[];
+  /** Segundos que le quedan escondido en el baño a cada jugador (0 = fuera). */
+  hd?: number[];
+  /** Zancadilla: pie fuera (1/0) de cada jugador. */
+  tr?: number[];
+  /** Bóveda: `[progreso 0..1, segundos de recarga, jugador en el panel 1, en el panel 2]`. */
+  vt?: number[];
+  /** Disfraz de cada jugador: `[disfraz (DISGUISES + 1; 0 = ninguno), segundos que le quedan]`. */
+  dg?: number[][];
+  /** Emote en curso de cada jugador (EMOTES + 1; 0 = ninguno). */
+  em?: number[];
+  /** Basura de LITTER: 1 si no está en el suelo (alguien la lleva o se está reponiendo). */
+  lt?: number[];
+  /** Basura que lleva cada jugador en la mano (índice en LITTER o -1). */
+  cy?: number[];
 }
 
 /** Una mesa: apuestas, fases y resultados. El anfitrión tiene cinco; los invitados solo ven el estado. */
@@ -190,6 +237,8 @@ export class Table {
   readonly bets: SeatBet[];
   /** Qué jugadores están sentados en esta mesa. */
   readonly present: boolean[];
+  /** Multiplicador extra de los premios (la mesa caliente paga más). */
+  boost = 1;
 
   constructor(readonly game: GameKind) {
     this.bets = Array.from({ length: MAX_SEATS }, () => ({ spot: 0, amount: 1, locked: false }));
@@ -250,8 +299,11 @@ export class Table {
     return p.length > 0 && p.every((i) => this.bets[i].locked);
   }
 
-  /** Avanza la ronda. `chips` es el bolsillo de cada jugador (se modifica al pagar). */
-  update(dt: number, chips: number[]) {
+  /**
+   * Avanza la ronda. `chips` es el bolsillo de cada jugador (se modifica al pagar) y `luck` marca quién
+   * lleva el dado cargado (se gasta en su próxima apuesta: si gana, cobra el doble).
+   */
+  update(dt: number, chips: number[], luck?: number[]) {
     // Mesa vacía: no corre el reloj (la ronda espera a que alguien se siente).
     if (this.phase === PH_BET && this.players().length === 0) {
       this.t = 0;
@@ -259,7 +311,7 @@ export class Table {
     }
     this.t += dt;
     if (this.phase === PH_BET) {
-      if (this.allLocked() || this.t >= BET_TIME) this.spin(chips);
+      if (this.allLocked() || this.t >= BET_TIME) this.spin(chips, luck);
     } else if (this.phase === PH_SPIN) {
       if (this.t >= SPIN_TIME) {
         this.phase = PH_PAY;
@@ -271,7 +323,7 @@ export class Table {
   }
 
   /** Resuelve la ronda: resultado, pagos y fichas. */
-  private spin(chips: number[]) {
+  private spin(chips: number[], luck?: number[]) {
     this.out = resolve(this.game, Math.random);
     for (let i = 0; i < MAX_SEATS; i++) {
       if (!this.present[i]) {
@@ -282,7 +334,11 @@ export class Table {
       const amount = Math.max(0, Math.min(b.amount, chips[i]));
       const mult = this.out.mults[b.spot] ?? 0;
       // Fichas enteras: los multiplicadores con decimales se redondean al pagar.
-      const win = mult > 0 ? Math.round(amount * mult) : 0;
+      let win = mult > 0 ? Math.round(amount * mult * this.boost) : 0;
+      if (luck && luck[i] > 0) {
+        if (win > 0) win *= 2;
+        luck[i] = 0;
+      }
       this.delta[i] = win > 0 ? win : -amount;
       chips[i] += this.delta[i];
       b.locked = true;
