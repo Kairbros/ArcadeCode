@@ -428,6 +428,102 @@ Petición del usuario (2026-10-19): algo como *Gamble With Your Friends* (casino
 - Ideas para crecer (como el original): objetos y tienda (amuletos que cambian probabilidades), más pisos con
   máquinas más caras, eventos del prestamista, ruleta y cartas, deuda que crece si no se paga entera.
 
+## 6i. Casino: economía, ventanilla, rondas, borrachos y mecanismos (2026-10-21)
+
+Petición del usuario: convertir el casino en una experiencia cooperativa de riesgo con cinco rondas. **Esto sustituye los
+turnos con cuota de 6h** (la parte de máquinas/mesas de 6h está obsoleta: ahora hay 12 mesas en dos pisos).
+
+- **Todo el balance en `casino/balance.ts`** (`TIERS`, `ROUNDS`, `LIMITS`, `params(ronda, jugadores)`, `goalFor`, `jailLoss`):
+  monedas iniciales (100), tope/límite por nº de jugadores (100/50, 180/90, 240/120, 300/150 en la ronda 1; límite =
+  mitad del tope), `capMul` por ronda, retorno `ret`, guardias, borrachos, cárcel, mecanismos. Las fórmulas pasan por
+  `clamp` con cotas de `LIMITS`. La interfaz, la escena y el anfitrión leen de ahí; no hay números sueltos.
+- **Dinero**: cartera (`chips`: se roba, se gasta, la cárcel le quita el 50 % una vez por captura) y **depósito**
+  (`win.stake`, en la ventanilla: es lo único con lo que se apuesta en las mesas y está a salvo de la cárcel). Al acabar
+  la ronda el depósito vuelve a la cartera. `Ventanilla.deposit` valida todo (saldo, límite, tope, reja/alarma, vigilancia,
+  operación repetida) y no toca nada si falla; el anfitrión las procesa una a una.
+- **Mesas** (`table.ts`): pagan `apuesta × (premio − 1) × ret` de ganancia (ret baja de 1,4 a 0,85 en las rondas, aunque
+  el tope suba). `interrupt()` (borracho) quita solo las apuestas ya confirmadas, una vez; `blocked` para el reloj y las apuestas.
+- **Rondas**: `CasinoHost.startRound/endRound`. Objetivo = cartera+depósitos del equipo ≥ inicio × (1+crecimiento). Si falla:
+  la casa cobra (todos presos, 100 monedas, ronda 1). Tras la 5: `bossGate` y `onBossReady` (punto de extensión de la fase 2).
+- **Guardias**: `setGuardsOn(rp.guards)` (4 = dos por piso en la ronda 1), velocidad, insistencia (`chaseMul`), vista
+  (`sightMul`), pausa de ronda y condena escalan por ronda (`npc.ts`: `sightMul/chaseMul/pause`, estado `NPC_LURED`).
+- **Borrachos** (`drunk.ts`, reutilizan el andar de `npc.ts`): WALK → SIT (bloquea la mesa) → LEAVE; «Apartar» (E, `pushDrunk`)
+  los duerme (ASLEEP → GROGGY → vuelven o se van). Recarga `PUSH_CD`, éxito `drunk.push` por ronda.
+- **Mecanismos** (`mech.ts`, posiciones en `world3d.ts`): ronda 2 palanca (reja de la ventanilla), ronda 3 timbre (atrae a los
+  guardias de la planta baja) + ventanilla vigilada, ronda 4 alarma (bloquea la ventanilla; secuencia de botones del
+  mirador), ronda 5 todo junto.
+- **Red**: acciones nuevas del invitado `ca` 100 (depositar, `dv`), 101 apartar, 102 palanca, 103 timbre, 104 botón (los 40–57
+  son basura: no reutilizar). Estado nuevo: `sk dp vn mc bk dk pc ne bs`; los avisos viajan como sucesos numerados `ne`
+  (`events.ts`), así que host e invitados muestran el mismo texto una sola vez.
+- **Pruebas**: `npm test -- casino` (`casino-balance`: economía y simulación de calibrado; `casino-host`: partidas de 1–4,
+  cárcel, borrachos, rondas, mecanismos e invitado). Capturas: `npm run shot -- test/browser/casino.mjs` (dibuja varias veces
+  antes de capturar: la cámara se suaviza). Si se toca el balance, volver a mirar la tabla de calibrado que imprime `casino-balance`.
+
+## 6j. Dead Zone: Outbreak en el hub (2026-10-21)
+
+Portado desde la carpeta hermana `DeadZoneOutbreak` (FPS de un jugador con Vite, HUD en HTML y renderer propio) a
+`src/game/deadzone/` como juego del hub con multijugador (id `deadzone`, 1–4 jugadores). La carpeta original no se tocó.
+
+- **Cambios al portar**: Three.js sale del renderizador compartido (`stage.ts` → `renderInto`, lienzo 320×240); el HUD pasa
+  a canvas 2D (`hud.ts`); la entrada usa el `Keyboard` del hub y su propio ratón (`core/input.ts`, Pointer Lock o arrastrar);
+  se quitó el cargador GLTF opcional de armas; `Interactions` es por jugador (`PlayerCtx` = puntos + armas).
+- **Red**: el anfitrión (`DeadZoneHost`) simula TODO (zombis, rondas, armas y puntos de cada jugador, compras, puertas,
+  barricadas, daño). Cada invitado es dueño de su cuerpo y mirada (latido `DzMsg` cada 60 ms con banderas gatillo/apuntar/usar)
+  y manda acciones `ca` (1 clic, 2 recargar, 3 usar, 4 ranura); el anfitrión dispara desde SU posición y mirada con SU
+  munición, y calcula los precios (no se fía del cliente). Estado `DzSnap`: `pl pt wp zb rd dr wn bx ne ov`; avisos
+  como sucesos numerados `ne` (`Feedback` los convierte en HUD/sonido igual en anfitrión e invitado). Los invitados dibujan los
+  zombis con `Zombie.puppet` (misma pose, sin IA) y los disparos ajenos por el contador `fs`.
+- **Reglas de equipo**: zombis y cupo escalan con los jugadores (`tuneFor`); cada zombi persigue al jugador en pie más
+  cercano; el caído reaparece al acabar la ronda (pistola, mismos puntos); sin nadie en pie, fin (R reinicia).
+- Los juegos pesados pueden definir `dispose()` (liberar GPU): `main.ts` lo llama al volver al menú o cambiar de juego.
+- **Entrada por ventanas (arreglado el 2026-10-21)**: los zombis nacían fuera del recinto y no llegaban nunca; eran dos
+  fallos a la vez. (1) La rejilla de rutas miraba el centro de cada celda y los muros de 0,35 m caben entre dos centros
+  de 0,5 m, así que las rutas atravesaban las paredes y los zombis se quedaban empujándolas (ver §7). Ahora se cierra
+  toda celda que solape el colisionador engordado con el radio del cuerpo, y sin ruta hasta el jugador van a la ventana
+  exterior más cercana a la que sí se llega (`Zombie.pathToWindow`). (2) El alféizar (`window`) los frenaba, así que ni
+  rompiendo la barricada podían entrar: ahora el zombi lo ignora (trepa) y lo que cierra el hueco mientras queden
+  tablones es el colisionador `barricade` (se apaga en `paintPlanks`). Al cruzar, el alféizar les tapa las piernas un
+  instante (geometría de cajas: con 1,15 m de alféizar y un dintel a 1,95 m no cabe un cuerpo entero de pie); se aceptó
+  ese recorte antes que cambiar el arte de las ventanas, que es lo que impide al jugador salir por ellas.
+- **Pruebas**: `npm test -- deadzone` (5 ficheros portados de Vitest con `test/vitest-shim.ts` + `deadzone-net`: 1–4
+  jugadores, disparos y compras de un invitado, daño, reaparición, fin de partida, invitado y sala; y `deadzone-pursuit`:
+  muros finos, partida quieta que acaba con zombis dentro haciendo daño y ruta por la ventana abierta). Capturas:
+  `npm run shot -- test/browser/deadzone.mjs` (las tres últimas son ya una ronda de verdad: llegan, entran y cruzan).
+
+## 6k. Dead Zone: gráficos, armas, caja del centro y mejorador (2026-10-21)
+
+Petición del usuario: más aspecto de juego de zombis, mejorar las armas, la **caja misteriosa en el centro del mapa donde se pueda
+girar** y un **mejorador de armas como el del mapa Town de Black Ops 2**, «exprimiendo al máximo» Three.js y la web.
+
+- **Excepción a §6e**: Dead Zone ya no sigue la regla de «solo cajas simples»: las armas usan perfiles extruidos, cañones torneados
+  y cajas biseladas (`RoundedBoxGeometry`) porque el usuario pidió gráficos al máximo. Los personajes (zombis y soldados) siguen
+  siendo de cajas (`blockGeometry`, color por vértice, una malla por miembro).
+- **Armas** (`weapons/`): 8 (pistola, revólver, avispa, cortacerco, R-14, ametralladora, francotirador y pulso) con versión
+  mejorada de cada una (`UPGRADED`, `weaponDef(id, mejorada)`; nombre propio, ×2–2,6 de daño, más cargador y reserva, color `tint`).
+  `WeaponSystem` lleva `upg`, `upgrade`, `detach`/`attach` (el mejorador se queda el arma) y `upgradeMask` (bit por ranura, en
+  `wp[8]`). `model.ts` construye los 16 modelos; `view.ts` es la primera persona (corredera que retrocede, fogonazo en cruz, luz).
+- **Caja** (`world/centerpiece.ts` + `game/interact.ts`): plataforma con haz de luz en el centro de la plaza (0, −16), 950 puntos. Fases
+  0 cerrada → 1 ruleta (`BOX_ROLL` 4,2 s, cambia de arma cada vez más despacio) → 2 oferta (`BOX_OFFER` 9 s; solo la coge quien pagó; si
+  no, se pierde). No sale un arma que ya llevas. Estado por red: `bx = [fase, arma, quién, s]`.
+- **Energía y mejorador**: interruptor en el depósito norte (gratis, una vez) → `pu = [energía, fase, quién, arma, mejorada, s]`.
+  Mejorador en el Bloque B: 2 500 puntos, `UPGRADE_WORK` 3,6 s trabajando (el arma sale de la mano) y `UPGRADE_OFFER` 15 s para coger
+  la mejorada (si no, se la devuelve sola). Pintadas en las paredes guían hasta ellos. Los carteles de interacción de cada jugador
+  viajan en el snapshot (`pr`) para que el invitado también los vea.
+- **Gráficos**: `stage.ts` (cielo con shader: luna de sangre, nubes, estrellas, relámpagos, ciudad en ruinas; luna con sombras que
+  sigue al jugador; mapa de entorno PMREM para reflejos; **grupo fijo de 11 luces** que salta a las fuentes más cercanas de las ~35 del
+  mapa), `fx/post.ts` (HDR con MSAA + bloom + «look zombi»: aberración, viñeta, sangre en el borde con poca vida, grano),
+  `fx/weather.ts` (lluvia 100 % en el vertex shader que no cae bajo techo, ceniza y brasas, bancos de niebla, relámpagos y trueno),
+  `fx/particles.ts` y `fx/effects.ts` (sangre con charcos y salpicaduras, impactos con agujero de bala, casquillos con física,
+  humo, cabezas reventadas), `world/batch.ts` (fusiona la geometría estática por material y recalcula las UV **en metros del
+  mundo**), `world/textures.ts` (512 px con relieve), `world/decals.ts`/`decor.ts` (sangre, manos, arañazos, pintadas, charcos).
+- **Calidad adaptativa** (`DzStage.adapt`): mide ms reales por fotograma y baja resolución interna (×3/×2/×1), MSAA y bloom si va
+  lento (>25 ms) o sube con margen. En una iGPU Intel UHD el postproceso era el 65 % del coste.
+- **Trampa que costó un rato**: una `SpotLight` con `shadow.autoUpdate = false` que nunca generó su mapa invalida el muestreador
+  de sombras y **ninguna malla iluminada se dibuja** (solo las `MeshBasicMaterial`). Hay que poner `needsUpdate = true` una vez.
+- **Orientación**: los zombis, soldados y armas miran a −Z (como la cámara del jugador); los brazos se levantan con rotación +X.
+- **Pruebas**: `test/deadzone-machines.test.ts` (arsenal y mejora, caja, energía, mejorador, invitado y precios) y capturas con
+  `npm run shot -- test/browser/deadzone-visual.mjs` (plaza, caja girando, mejorador, las 16 armas, zombis y sangre) y `deadzone-rendimiento.mjs` (ms por fotograma quitando piezas).
+
 ## 6e. Estilo 3D: bloques simples (regla del usuario)
 
 **Todo lo 3D se modela con cajas grandes y simples**, como figuras de bloques: una caja para el torso, otra para
@@ -533,6 +629,17 @@ Los HUD y el menú tienen aire de recreativa retro. Piezas, todas compartidas:
   al leerlo). Para simulaciones largas dentro de la página, subir `--virtual-time-budget` (p. ej. 300000).
 - esbuild desde la carpeta temporal: las importaciones relativas largas fallan; usar rutas absolutas
   (`import ... from "C:/Users/.../ArcadeCode/src/game/..."`).
+- **Rejilla de rutas muestreando solo el centro de la celda**: en Dead Zone los muros miden 0,35 m y las celdas
+  0,5 m, así que un muro cabía entero entre dos centros, la rejilla no lo veía y las rutas de los zombis lo
+  atravesaban: se quedaban empujando la pared por fuera y **no llegaban nunca al jugador** («no salen los zombis»).
+  Al rasterizar hay que cerrar toda celda que solape el AABB engordado con el radio del cuerpo (`NavGrid.BODY`),
+  no solo la del centro. Los tests de la rejilla no lo cazaban porque su muro de prueba caía justo encima de un
+  centro de celda. Regresión en `test/deadzone-pursuit.test.ts`.
+- **Puertas y ventanas de un juego: colisión y navegación son dos cosas distintas**. Los tablones de Dead Zone
+  eran solo malla + bloqueo de la rejilla, sin colisión: al abrir la ventana al zombi (que trepa el alféizar,
+  ignorando el colisionador `window`) había que añadir el colisionador `barricade` para que una ventana cerrada
+  siguiera frenándolos (y tapando balas y visión). Al revés: si algo debe frenar al jugador pero no al enemigo,
+  no basta con un colisionador, hacen falta etiquetas distintas. 
 
 ## 8. Cómo se ha probado (reutilizable)
 

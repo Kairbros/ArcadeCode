@@ -16,6 +16,8 @@ import { BlocksHost } from "./blocks/game";
 import { BlocksInput, releasePointer } from "./blocks/input";
 import { CasinoHost } from "./casino/game";
 import { CasinoInput } from "./casino/input";
+import { DeadZoneHost } from "./deadzone/game";
+import { Input as DeadZoneInput } from "./deadzone/core/input";
 import { Keyboard, isTyping } from "./core/keyboard";
 import { GuestSession } from "./net/guest";
 import { HostSession } from "./net/host";
@@ -76,7 +78,16 @@ let guest: GuestSession | null = null;
 /** El selector de "Cambiar de juego" está abierto sobre la partida. */
 let switching = false;
 
+/** Libera la GPU del juego que se deja (los 3D pesados lo implementan). */
+function disposeGames() {
+  const d = (x: unknown) => (x as { dispose?: () => void } | null)?.dispose?.();
+  d(current);
+  d(host?.game);
+  d(guest?.game);
+}
+
 function showMain(error = "") {
+  disposeGames();
   host?.close();
   guest?.close();
   host = guest = null;
@@ -154,6 +165,7 @@ function startLocal(id: GameId) {
 }
 
 function startGame(id: GameId) {
+  disposeGames();
   setName(0, myName(0));
   const params = new URLSearchParams(location.search);
   const seed = Number(params.get("seed")) || undefined;
@@ -196,6 +208,15 @@ function startGame(id: GameId) {
   if (id === "casino") {
     // El salón lo lleva este equipo: se anda hasta las mesas y se apuesta en ellas.
     const game = new CasinoHost(new CasinoInput(keyboard), 0, "local");
+    play({
+      size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
+      get finished() { return game.finished; }, switchGame: startLocal,
+    }, game);
+    return;
+  }
+  if (id === "deadzone") {
+    // Tú solo contra las oleadas (en red se suman hasta tres jugadores más).
+    const game = new DeadZoneHost(new DeadZoneInput(keyboard), 0, "local");
     play({
       size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,

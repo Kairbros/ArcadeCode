@@ -223,6 +223,27 @@ export interface CasinoSnap {
   lt?: number[];
   /** Basura que lleva cada jugador en la mano (índice en LITTER o -1). */
   cy?: number[];
+  /** Depósito de cada jugador en la ventanilla (con lo que se apuesta en las mesas). */
+  sk?: number[];
+  /**
+   * Ventanilla: `[estado (0 abierta / 1 cerrada / 2 bloqueada), tope, depositado entre todos, límite individual,
+   * retorno ×100, ronda, vigilada 1/0]`.
+   */
+  vn?: number[];
+  /** Depositado por cada jugador en la ronda. */
+  dp?: number[];
+  /** Mecanismos: `[reja (s), timbre (s), recarga del timbre (s), alarma (s), progreso, ...orden de la secuencia]`. */
+  mc?: number[];
+  /** Mesas bloqueadas por un borracho (1/0), en el orden de las mesas. */
+  bk?: number[];
+  /** Borrachos: `[x, z, giro, estado, mesa, piso, segundos del estado]`. */
+  dk?: number[][];
+  /** Recarga (s) de «apartar borracho» de cada jugador. */
+  pc?: number[];
+  /** Sucesos recientes `[número, tipo (EVT_*), jugador, valor]` para que cada pantalla avise a quien toque. */
+  ne?: number[][];
+  /** Sala del jefe: 1 cuando se ha superado la ronda 5 (punto de extensión de la fase 2). */
+  bs?: number;
 }
 
 /** Una mesa: apuestas, fases y resultados. El anfitrión tiene cinco; los invitados solo ven el estado. */
@@ -239,6 +260,8 @@ export class Table {
   readonly present: boolean[];
   /** Multiplicador extra de los premios (la mesa caliente paga más). */
   boost = 1;
+  /** Un borracho la tiene tomada: no corre el reloj de apuestas, no se puede apostar ni dar a «listo». */
+  blocked = false;
 
   constructor(readonly game: GameKind) {
     this.bets = Array.from({ length: MAX_SEATS }, () => ({ spot: 0, amount: 1, locked: false }));
@@ -264,7 +287,7 @@ export class Table {
 
   setSpot(i: number, spot: number) {
     const b = this.bets[i];
-    if (!b || !this.present[i] || this.phase !== PH_BET || b.locked) return;
+    if (!b || !this.present[i] || this.phase !== PH_BET || b.locked || this.blocked) return;
     const n = this.spotCount();
     b.spot = ((Math.floor(spot) % n) + n) % n;
   }
@@ -272,14 +295,14 @@ export class Table {
   /** Apuesta una cantidad concreta (se recorta a lo que haya en el bolsillo). */
   setAmount(i: number, amount: number, chips: number) {
     const b = this.bets[i];
-    if (!b || !this.present[i] || this.phase !== PH_BET || b.locked) return;
+    if (!b || !this.present[i] || this.phase !== PH_BET || b.locked || this.blocked) return;
     b.amount = Math.max(1, Math.min(Math.max(1, chips), Math.floor(amount)));
   }
 
   /** Sube o baja la apuesta por la lista de cantidades. */
   bump(i: number, dir: number, chips: number) {
     const b = this.bets[i];
-    if (!b || !this.present[i] || this.phase !== PH_BET || b.locked) return;
+    if (!b || !this.present[i] || this.phase !== PH_BET || b.locked || this.blocked) return;
     const at = BET_STEPS.indexOf(b.amount);
     const next = at < 0 ? BET_STEPS[0] : BET_STEPS[Math.max(0, Math.min(BET_STEPS.length - 1, at + dir))];
     this.setAmount(i, next, chips);
@@ -288,7 +311,7 @@ export class Table {
   /** Enter: me doy por listo (o me lo pienso otra vez). */
   toggleLock(i: number, chips: number) {
     const b = this.bets[i];
-    if (!b || !this.present[i] || this.phase !== PH_BET) return;
+    if (!b || !this.present[i] || this.phase !== PH_BET || this.blocked) return;
     if (chips < 1) return;
     if (!b.locked && (b.amount < 1 || b.amount > chips)) this.setAmount(i, chips, chips);
     b.locked = !b.locked;
@@ -300,18 +323,21 @@ export class Table {
   }
 
   /**
-   * Avanza la ronda. `chips` es el bolsillo de cada jugador (se modifica al pagar) y `luck` marca quién
-   * lleva el dado cargado (se gasta en su próxima apuesta: si gana, cobra el doble).
+   * Avanza la ronda. `chips` es el depósito de cada jugador (se modifica al pagar), `luck` marca quién
+   * lleva el dado cargado (se gasta en su próxima apuesta: si gana, cobra el doble) y `ret` es el retorno de
+   * la ronda (multiplica las ganancias: ver `spin`).
    */
-  update(dt: number, chips: number[], luck?: number[]) {
+  update(dt: number, chips: number[], luck?: number[], ret = 1) {
     // Mesa vacía: no corre el reloj (la ronda espera a que alguien se siente).
     if (this.phase === PH_BET && this.players().length === 0) {
       this.t = 0;
       return;
     }
+    // Con un borracho encima, las apuestas se paran: el reloj de la ronda espera a que se vaya.
+    if (this.phase === PH_BET && this.blocked) return;
     this.t += dt;
     if (this.phase === PH_BET) {
-      if (this.allLocked() || this.t >= BET_TIME) this.spin(chips, luck);
+      if (this.allLocked() || this.t >= BET_TIME) this.spin(chips, luck, ret);
     } else if (this.phase === PH_SPIN) {
       if (this.t >= SPIN_TIME) {
         this.phase = PH_PAY;
@@ -322,8 +348,41 @@ export class Table {
     }
   }
 
-  /** Resuelve la ronda: resultado, pagos y fichas. */
-  private spin(chips: number[], luck?: number[]) {
+  /**
+   * Un borracho se desploma sobre la mesa: quien tenía una apuesta ya confirmada (comprometida) en la fase de
+   * apuestas la pierde (sale de su depósito, UNA sola vez: la apuesta queda desmarcada). Las monedas sin
+   * comprometer no se tocan. Devuelve lo perdido por jugador.
+   */
+  interrupt(chips: number[]): number[] {
+    const lost = Array<number>(MAX_SEATS).fill(0);
+    this.blocked = true;
+    if (this.phase !== PH_BET) return lost;
+    for (let i = 0; i < MAX_SEATS; i++) {
+      const b = this.bets[i];
+      if (!this.present[i] || !b.locked) continue;
+      lost[i] = Math.max(0, Math.min(b.amount, chips[i]));
+      chips[i] -= lost[i];
+      b.locked = false;
+    }
+    return lost;
+  }
+
+  /** La mesa vuelve a estar disponible. */
+  release() {
+    this.blocked = false;
+  }
+
+  /** Fin de ronda: ninguna apuesta se queda confirmada (el depósito se devuelve a la cartera). */
+  cancelBets() {
+    for (const b of this.bets) b.locked = false;
+  }
+
+  /**
+   * Resuelve la ronda: resultado, pagos y fichas. Los multiplicadores de las casillas son lo que devuelve la mesa
+   * por cada ficha apostada (×2 = la ficha y otra más). La ganancia (lo que supera a la ficha) se multiplica por el
+   * retorno de la ronda `ret`; si la mesa devuelve menos de lo apostado, se pierde la diferencia.
+   */
+  private spin(chips: number[], luck?: number[], ret = 1) {
     this.out = resolve(this.game, Math.random);
     for (let i = 0; i < MAX_SEATS; i++) {
       if (!this.present[i]) {
@@ -334,12 +393,13 @@ export class Table {
       const amount = Math.max(0, Math.min(b.amount, chips[i]));
       const mult = this.out.mults[b.spot] ?? 0;
       // Fichas enteras: los multiplicadores con decimales se redondean al pagar.
-      let win = mult > 0 ? Math.round(amount * mult * this.boost) : 0;
+      const gross = mult * this.boost;
+      let net = gross >= 1 ? Math.round(amount * (gross - 1) * ret) : -Math.round(amount * (1 - gross));
       if (luck && luck[i] > 0) {
-        if (win > 0) win *= 2;
+        if (net > 0) net *= 2;
         luck[i] = 0;
       }
-      this.delta[i] = win > 0 ? win : -amount;
+      this.delta[i] = Math.max(-amount, net);
       chips[i] += this.delta[i];
       b.locked = true;
     }

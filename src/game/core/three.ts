@@ -11,7 +11,7 @@ export function glRenderer(): THREE.WebGLRenderer | null {
   try {
     gl = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     gl.shadowMap.enabled = true;
-    gl.shadowMap.type = THREE.PCFSoftShadowMap;
+    gl.shadowMap.type = THREE.PCFShadowMap;
     gl.toneMapping = THREE.ACESFilmicToneMapping;
     gl.outputColorSpace = THREE.SRGBColorSpace;
     gl.setClearColor(0x000000, 1);
@@ -124,4 +124,17 @@ export function glowSprite(color: number, size: number, opacity = 1): THREE.Spri
   }));
   sp.scale.setScalar(size);
   return sp;
+}
+
+/**
+ * Ajusta el tamano del renderizador compartido a w x h unidades logicas a la resolucion de la pantalla y devuelve el
+ * factor de resolucion usado (para los juegos que dibujan con su propia cadena de postproceso).
+ */
+export function fitRenderer(w: number, h: number, pixelScale: number): { r: THREE.WebGLRenderer; k: number } | null {
+  const r = glRenderer();
+  if (!r) return null;
+  const k = Math.max(1, Math.min(MAX_RES, Math.round(pixelScale)));
+  r.getSize(size);
+  if (size.x !== w * k || size.y !== h * k) r.setSize(w * k, h * k, false);
+  return { r, k };
 }

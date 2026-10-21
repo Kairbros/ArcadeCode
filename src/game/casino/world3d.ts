@@ -327,6 +327,45 @@ export function nearShop(x: number, z: number, lv: Level = 0): boolean {
   return lv === 0 && x < -HX + 4.2 && Math.abs(z) < 6;
 }
 
+// --- Ventanilla y mecanismos (vestíbulo, zona neón, bar y mirador) ---------------------------------
+/** Ventanilla de depósitos: mostrador pegado a la pared sur del vestíbulo, planta baja (x, z del mostrador). */
+export const WINDOW: [number, number] = [-7.5, HZ - 1.1];
+/** Dónde se para quien deposita (delante del mostrador). */
+export const WINDOW_STAND: [number, number] = [WINDOW[0], HZ - 3.3];
+/** ¿Está al alcance de la ventanilla? Solo planta baja. */
+export function nearWindow(x: number, z: number, lv: Level = 0): boolean {
+  return lv === 0 && Math.abs(x - WINDOW[0]) < 2.4 && z > HZ - 5.2;
+}
+/** Palanca de la reja: pared este de la zona neón, lejos de la ventanilla (hay que cruzar el casino). */
+export const LEVER: [number, number] = [HX - 0.5, 13];
+export const LEVER_STAND: [number, number] = [HX - 2.2, 13];
+/** Timbre señuelo: pared oeste, junto al bar; los guardias de la planta baja acuden a su pie. */
+export const LURE: [number, number] = [-HX + 0.5, 14];
+export const LURE_STAND: [number, number] = [-HX + 2.4, 14];
+export function nearLever(x: number, z: number, lv: Level = 0): boolean {
+  return lv === 0 && Math.hypot(x - LEVER_STAND[0], z - LEVER_STAND[1]) < 2.0;
+}
+export function nearLure(x: number, z: number, lv: Level = 0): boolean {
+  return lv === 0 && Math.hypot(x - LURE_STAND[0], z - LURE_STAND[1]) < 2.0;
+}
+/** Panel de la alarma: cuatro botones de colores en la pared sur del mirador (entrepiso). */
+export const SEQ_X = [-4.5, -1.5, 1.5, 4.5];
+export const SEQ_Z = HZ - 0.5;
+/** Botón de la secuencia al alcance (0..3) o -1. Solo en el entrepiso. */
+export function nearSeq(x: number, z: number, lv: Level = 1): number {
+  if (lv !== 1 || z < HZ - 3.4) return -1;
+  let best = -1;
+  let bestD = 1.0;
+  SEQ_X.forEach((bx, k) => {
+    const d = Math.abs(x - bx);
+    if (d < bestD) {
+      bestD = d;
+      best = k;
+    }
+  });
+  return best;
+}
+
 /** Limita un punto a la sala (deja un margen respecto a las paredes). */
 export function clampToHall(x: number, z: number, margin = 0.8): [number, number] {
   const halfW = HALL.w / 2 - margin;

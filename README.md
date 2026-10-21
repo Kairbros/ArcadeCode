@@ -43,9 +43,21 @@ cambiar a otro sin cerrar la sala (tecla **J**).
   baja con el tiempo y al moverse, y con el hambre a 0 se pierde vida (hasta medio corazón). Con el hambre casi
   llena se cura sola; la carne se come manteniendo el clic derecho (cocinada alimenta mucho más). Al morir se suelta todo donde se cae y se
   reaparece en el punto de salida.
-- **Casino de deudas**: cooperativo de 1 a 4. Todos comparten el banco y cada día (90 s) hay que juntar la cuota
-  del prestamista, que crece día a día. Tragaperras ($10), Doble o nada ($50) y Dados ($100): más caro, más se
-  gana y más se arriesga. Si al cerrar no llega el dinero, se acaba la partida.
+- **Casino de deudas**: cooperativo de 1 a 4 en cinco rondas de dificultad progresiva (la 5 prepara al jefe final, aún
+  por llegar). Todos empiezan con 100 monedas; en la **ventanilla** (vestíbulo) se depositan monedas dentro del tope de
+  la ronda y esas monedas son las que se apuestan en las mesas. Hay que cumplir el objetivo del equipo antes de que
+  acabe cada ronda, esquivar a los guardias (la cárcel quita el 50 % de la cartera), apartar a los borrachos que
+  bloquean las mesas y coordinarse con la palanca, el timbre y la alarma. Todo el balance está en `balance.ts`.
+
+- **Dead Zone: Outbreak**: FPS cooperativo de 1 a 4 en el SECTOR 09, una ciudad en ruinas de noche bajo una luna de sangre,
+  con lluvia, niebla, relámpagos y sombras. Rondas infinitas de infectados (caminantes, corredores y brutos, con seis
+  aspectos cada uno), puntos por impacto y baja, compras de pared, puertas que se abren con puntos y barricadas que hay que
+  reparar. Ocho armas (pistola, revólver, avispa, cortacerco, fusil, ametralladora, francotirador y cañón de pulso).
+  En el **centro de la plaza** está la **caja misteriosa** (950 puntos): se abre, la ruleta gira entre las armas y te
+  ofrece una que puedes coger unos segundos. Al fondo, en el depósito norte, el **interruptor de la energía**; con ella, el
+  **mejorador** del Bloque B (2 500 puntos) se queda tu arma unos segundos y la devuelve mejorada (más daño, cargador y
+  reserva, otro nombre y brillo propio). Cada jugador lleva sus propios puntos y armas; si caes, vuelves al acabar la
+  ronda; si caen todos, fin de la partida.
 
 En Karts, Sumo y Monigotes los huecos libres hasta 4 los ocupan **bots** (se pueden desactivar desde
 el menú; sin bots, en solitario es contrarreloj o aguantar). En Ruleta de cartuchos los bots sientan
@@ -67,7 +79,8 @@ En todos los juegos valen **WASD o flechas** y **Espacio o Enter** como botón d
 | Monigotes | ← → mover · ↑ saltar (doble) · ↓ bajar de plataforma | Golpe/arma: Espacio / Enter / E / K | R nueva ronda |
 | Ruleta de cartuchos | ← → elegir escopeta/objeto y objetivo | Usar/disparar: Espacio / Enter / E | ↓ / Retroceso volver · R nueva partida |
 | Bloques (creativo) | WASD andar · Espacio saltar/subir · Shift bajar (volando) · ratón (clic para capturarlo) o flechas mirar | Romper: clic / Q · Poner: clic derecho / Enter | 1–9 o rueda: bloque · F volar |
-| Casino de deudas | WASD / flechas | Jugar en la máquina de delante: Espacio / Enter / E | R nueva partida |
+| Casino de deudas | WASD andar · ratón mirar · Shift correr | E: sentarse / ventanilla / palanca / timbre / botones / apartar borracho · clic: usar la mano · ↑↓←→ + Enter: apostar o depositar | R nueva partida |
+| Dead Zone | WASD andar · ratón mirar · Shift correr · Espacio saltar · Ctrl/C agacharse | Clic disparar · clic derecho apuntar · E comprar/abrir/caja/mejorador/energía y reparar (mantener) · R recargar · 1–3 armas · F linterna | M sonido · R nueva partida (anfitrión, al caer todos) |
 | Bloques (supervivencia) | Igual, sin volar | Golpear a un animal: clic · Romper: mantener clic · Poner o usar la mesa o el horno: clic derecho / Enter · Comer: mantener clic derecho con comida · Reaparecer: Espacio / clic | E / Tab / I inventario (clic coger/dejar, clic derecho la mitad o uno, Mayús+clic mover, clic fuera tirar) · Q tirar uno (Ctrl+Q el montón) · Esc cerrar |
 
 Comunes: **G** escala de grises · **J** cambiar de juego (con la ronda terminada) · **Esc** volver al
@@ -160,7 +173,12 @@ src/game/ruleta/     Ruleta de cartuchos: match (reglas + árbitro), bot, models
 src/game/blocks/     Bloques: world (generación + rayo), mesher (chunks), player (física), pilot, atlas, render (3D), input, game;
                      supervivencia: items, inventory, crafting (recetas), craftui (pantalla con ratón), icons, drops,
                      mobs (animales y monstruos), vitals (vida, hambre y aire), furnace (horno), daycycle (día y noche)
-src/game/casino/     Casino de deudas: config (máquinas y premios), floor (sala + banco + días), render, input, game
+src/game/deadzone/   Dead Zone: Outbreak (portado de DeadZoneOutbreak): game (anfitrión e invitado), stage (3D: cielo, luces, sombras, calidad
+                     adaptativa), hud, core/input, enemies (IA y modelos), weapons (datos, mejora, modelos 3D y vista), world (mapa, rutas,
+                     caja/mejorador/interruptor en centerpiece, decoración, fusión de geometría, cielo), fx (partículas, clima, postproceso),
+                     game/ (rondas, puntos, interacciones), player
+src/game/casino/     Casino de deudas: balance (rondas, topes, guardias, borrachos…), ventanilla, mech (palanca/timbre/alarma), drunk,
+                     events, table (mesas), npc, world3d, scene (3D), hud, input, game (anfitrión e invitado)
 src/server/signal.ts emparejamiento y relé (compartido por Vercel y el servidor local)
 api/signal.ts        función serverless de Vercel
 scripts/serve.mjs    servidor local (juego + API en memoria)

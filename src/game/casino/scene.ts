@@ -3,11 +3,14 @@
 import * as THREE from "three";
 import { PLAYER_COLORS } from "../core/config";
 import { disposeScene, glowSprite, glRenderer, projectTo, renderInto } from "../core/three";
-import { BANANA_MAX, CH, CW, DROP_MAX, EMOTES, EYE_H, ITEM_COST, NPC_OFF, RUN_FOV, VAULT_CD, WALK_FOV, GUARD_FOV, GUARD_SIGHT, HOT_BOOST, NPC_CHASE, NPC_DISTRACTED, HEAD_BOB, PH_BET, PH_PAY, PH_SPIN, SLOT_BAT, SLOT_HAND, SPIN_TIME } from "./config";
+import { BANANA_MAX, CH, CW, DROP_MAX, EMOTES, EYE_H, ITEM_COST, NPC_LURED, NPC_OFF, RUN_FOV, VAULT_CD, WALK_FOV, GUARD_FOV, GUARD_SIGHT, HOT_BOOST, NPC_CHASE, NPC_DISTRACTED, HEAD_BOB, PH_BET, PH_PAY, PH_SPIN, SLOT_BAT, SLOT_HAND, SPIN_TIME } from "./config";
 import {
-  ATRIUM, BATH, croupierSpot, HALL, JAIL, JAIL_LEVER, JAIL_SWITCH, JAIL_TRASH, LITTER, MANNEQUINS, onStair, PILLARS, ROUTES, STAIRS, tablePoint,
-  TABLES, UPPER_Y, VAULT, VAULT_PADS, ZONES, type TableDef,
+  ATRIUM, BATH, croupierSpot, HALL, JAIL, JAIL_LEVER, JAIL_SWITCH, JAIL_TRASH, LEVER, LITTER, LURE, MANNEQUINS, onStair, PILLARS, ROUTES, SEQ_X, SEQ_Z,
+  STAIRS, tablePoint, TABLES, UPPER_Y, VAULT, VAULT_PADS, WINDOW, ZONES, type TableDef,
 } from "./world3d";
+import { DRUNK_POOL, roundDef } from "./balance";
+import { DR_ASLEEP, DR_GONE, DR_GROGGY, DR_SIT } from "./drunk";
+import { WIN_BLOCKED, WIN_CLOSED } from "./ventanilla";
 import { PLINKO_MULT, RED_NUMBERS, SLOT_SYMBOLS, type CasinoSnap, type TableSnap } from "./table";
 
 /** Todo lo que necesita la escena para dibujar un fotograma. */
@@ -834,6 +837,20 @@ export class CasinoStage {
   private readonly guards: { c: Character; cone: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial> }[] = [];
   /** Cáscaras de banana del suelo: pool de mallas. */
   private readonly bananaPool: THREE.Object3D[] = [];
+  /** Ventanilla: reja que sube y baja, lámpara de estado y cartel con el estado. */
+  private winShutter: THREE.Mesh | null = null;
+  private winLamp: THREE.MeshBasicMaterial | null = null;
+  private winGlow: THREE.Sprite | null = null;
+  private readonly winLabel = new CanvasLabel(256, 64);
+  /** Palanca de la reja (brazo y lámpara), timbre (botón y halo) y botones de la alarma. */
+  private leverArm: THREE.Group | null = null;
+  private leverLamp: THREE.MeshBasicMaterial | null = null;
+  private lureBtn: THREE.MeshBasicMaterial | null = null;
+  private lureGlow: THREE.Sprite | null = null;
+  private readonly seqBtns: { mat: THREE.MeshBasicMaterial; label: CanvasLabel; color: number }[] = [];
+  private seqAlarm: THREE.Sprite | null = null;
+  /** Borrachos (la reserva del anfitrión). */
+  private readonly drunks: Character[] = [];
 
   constructor() {
     const sc = this.scene;
@@ -861,6 +878,8 @@ export class CasinoStage {
     this.buildRoom();
     TABLES.forEach((def) => this.rigs.push(this.buildTable(def)));
     this.buildJail();
+    this.buildWindow();
+    this.buildMechanisms();
     this.buildViewModel();
     // Monedas del suelo (las tira un golpe): un pool de mallas que se enciende y apaga.
     for (let i = 0; i < DROP_MAX; i++) {
@@ -928,6 +947,15 @@ export class CasinoStage {
       cone.position.y = 0.05;
       c.root.add(cone);
       this.guards.push({ c, cone });
+    }
+    // Borrachos: poroto verdoso con una botella en la mano (sin bate).
+    for (let k = 0; k < DRUNK_POOL; k++) {
+      const c = this.character(0x8aa84a, false);
+      if (c.bat) c.bat.visible = false;
+      this.put(c.arms[1], 0.09, 0.3, 0.09, 0x40e080, 0, -0.6, -0.12, { emissive: 0x0a3a1a });
+      this.put(c.arms[1], 0.05, 0.12, 0.05, 0x40e080, 0, -0.8, -0.12, { emissive: 0x0a3a1a });
+      c.root.visible = false;
+      this.drunks.push(c);
     }
     // Todo proyecta y recibe sombra (menos los halos y lo que llevas en la mano).
     const inView = (o: THREE.Object3D) => {
@@ -1802,8 +1830,225 @@ export class CasinoStage {
     }
   }
 
+  // --- Ventanilla, palanca, timbre y alarma ------------------------------------------------
+  /**
+   * La ventanilla: mostrador de madera con marco burdeos contra la pared sur del vestíbulo, reja que sube y baja,
+   * cartel «VENTANILLA» con su estado, lámpara verde/amarilla/roja y montones de monedas. No es la tienda
+   * (la barra del bar): aquí solo se deposita para apostar.
+   */
+  private buildWindow() {
+    const g = new THREE.Group();
+    g.position.set(WINDOW[0], 0, WINDOW[1]);
+    g.rotation.y = Math.PI;
+    this.scene.add(g);
+    this.put(g, 4.6, 1.1, 0.9, 0x6a2a1e, 0, 0.55, 0.35);
+    this.put(g, 5.0, 0.14, 1.25, 0xd89a52, 0, 1.17, 0.42);
+    this.put(g, 0.3, 3.1, 0.5, 0x8a1a34, -2.2, 1.55, 0);
+    this.put(g, 0.3, 3.1, 0.5, 0x8a1a34, 2.2, 1.55, 0);
+    this.put(g, 4.7, 0.7, 0.5, 0x8a1a34, 0, 3.15, 0);
+    // Hueco oscuro y, dentro, el cajero (una silueta) con un montón de monedas.
+    this.put(g, 4.1, 1.55, 0.06, 0x140a18, 0, 2.0, -0.2);
+    this.put(g, 0.7, 0.9, 0.3, 0x2a3a8a, 0.9, 1.75, -0.05);
+    this.sphere(g, 0.26, 0xf2cc4a, 0.9, 2.35, -0.05);
+    for (let k = 0; k < 4; k++) this.put(g, 0.5, 0.07 + k * 0.001, 0.5, 0xffce4a, -1.2 + (k % 2) * 0.1, 1.28 + k * 0.08, 0.2, { emissive: 0x4a3004 });
+    // Reja: se recoge hacia el dintel cuando la ventanilla abre.
+    const shutter = this.put(g, 4.2, 1.6, 0.1, 0x6a6a7a, 0, 2.1, 0.3, { emissive: 0x14161c });
+    for (let k = 0; k < 8; k++) this.put(shutter, 4.2, 0.04, 0.12, 0x3a3a46, 0, -0.7 + k * 0.2, 0);
+    this.winShutter = shutter;
+    // Cartel del dintel y estado.
+    const sign = new CanvasLabel(512, 128);
+    sign.set("VENTANILLA", "#ffd23a");
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 0.9), new THREE.MeshBasicMaterial({ map: sign.texture, transparent: true }));
+    plate.position.set(0, 3.15, 0.27);
+    g.add(plate);
+    const status = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.55), new THREE.MeshBasicMaterial({ map: this.winLabel.texture, transparent: true }));
+    status.position.set(0, 0.8, 0.82);
+    g.add(status);
+    const lamp = new THREE.MeshBasicMaterial({ color: 0x2ebd6c });
+    const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.34, 0.14), lamp);
+    bulb.position.set(-1.95, 3.15, 0.3);
+    g.add(bulb);
+    this.winLamp = lamp;
+    const glow = glowSprite(0x2ebd6c, 1.6, 0.35);
+    glow.position.set(-1.95, 3.15, 0.5);
+    g.add(glow);
+    this.winGlow = glow;
+    this.zoneSign("DEPÓSITOS · NO ES LA TIENDA", "#ff8a24", WINDOW[0], 4.35, WINDOW[1] - 0.45, Math.PI, 4.2);
+  }
+
+  /**
+   * Palanca de la reja (pared este), timbre señuelo (pared oeste) y panel de la alarma de cuatro botones de colores
+   * (mirador del entrepiso). Cada uno cambia de aspecto con el estado real que manda el anfitrión.
+   */
+  private buildMechanisms() {
+    // --- Palanca ---
+    const lg = new THREE.Group();
+    lg.position.set(LEVER[0] + 0.35, 0, LEVER[1]);
+    lg.rotation.y = -Math.PI / 2;
+    this.scene.add(lg);
+    this.put(lg, 1.0, 1.5, 0.2, 0x4a4a58, 0, 1.4, 0);
+    this.put(lg, 0.16, 0.9, 0.06, 0x120810, 0, 1.4, 0.12);
+    const arm = new THREE.Group();
+    arm.position.set(0, 1.4, 0.16);
+    this.put(arm, 0.1, 0.8, 0.1, 0xd8d8e0, 0, 0.4, 0);
+    this.sphere(arm, 0.14, 0xe83e54, 0, 0.84, 0);
+    lg.add(arm);
+    this.leverArm = arm;
+    const lamp = new THREE.MeshBasicMaterial({ color: 0xff3040 });
+    const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.24, 0.1), lamp);
+    bulb.position.set(0, 2.35, 0.12);
+    lg.add(bulb);
+    this.leverLamp = lamp;
+    const lsign = new CanvasLabel(256, 64);
+    lsign.set("PALANCA · REJA", "#ffce4a");
+    const lplate = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 0.48), new THREE.MeshBasicMaterial({ map: lsign.texture, transparent: true }));
+    lplate.position.set(0, 2.8, 0.12);
+    lg.add(lplate);
+    // --- Timbre ---
+    const bg = new THREE.Group();
+    bg.position.set(LURE[0] - 0.35, 0, LURE[1]);
+    bg.rotation.y = Math.PI / 2;
+    this.scene.add(bg);
+    this.put(bg, 0.9, 1.1, 0.2, 0x4a4a58, 0, 1.4, 0);
+    const bmat = new THREE.MeshBasicMaterial({ color: 0xe83e54 });
+    const btn = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.18), bmat);
+    btn.position.set(0, 1.4, 0.16);
+    bg.add(btn);
+    this.lureBtn = bmat;
+    const bglow = glowSprite(0xe83e54, 1.6, 0.35);
+    bglow.position.set(0, 1.4, 0.4);
+    bg.add(bglow);
+    this.lureGlow = bglow;
+    const bsign = new CanvasLabel(256, 64);
+    bsign.set("TIMBRE", "#ffce4a");
+    const bplate = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.42), new THREE.MeshBasicMaterial({ map: bsign.texture, transparent: true }));
+    bplate.position.set(0, 2.2, 0.12);
+    bg.add(bplate);
+    // --- Panel de la alarma (entrepiso, pared sur) ---
+    const pg = new THREE.Group();
+    pg.position.set(0, UPPER_Y, SEQ_Z + 0.3);
+    pg.rotation.y = Math.PI;
+    this.scene.add(pg);
+    this.put(pg, 11, 1.7, 0.2, 0x2a1e34, 0, 1.4, 0);
+    const colors = [0xe83e54, 0x4a7aff, 0x3ad06a, 0xffce4a];
+    SEQ_X.forEach((x, k) => {
+      const mat = new THREE.MeshBasicMaterial({ color: colors[k] });
+      const b = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.2), mat);
+      b.position.set(-x, 1.4, 0.16);
+      pg.add(b);
+      const label = new CanvasLabel(64, 64);
+      label.set("", "#ffffff");
+      const num = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7), new THREE.MeshBasicMaterial({ map: label.texture, transparent: true }));
+      num.position.set(-x, 2.45, 0.12);
+      pg.add(num);
+      this.seqBtns.push({ mat, label, color: colors[k] });
+    });
+    const asign = new CanvasLabel(512, 128);
+    asign.set("ALARMA · SECUENCIA", "#ff6a7a");
+    const aplate = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.1), new THREE.MeshBasicMaterial({ map: asign.texture, transparent: true }));
+    aplate.position.set(0, 3.0, 0.12);
+    pg.add(aplate);
+    const alarm = glowSprite(0xff3040, 2.6, 0);
+    alarm.position.set(0, 2.3, 0.5);
+    pg.add(alarm);
+    this.seqAlarm = alarm;
+  }
+
+  /** Reja, lámpara, palanca, timbre y botones según el estado de la ventanilla y los mecanismos. */
+  private tickMechanisms(s: CasinoSnap, time: number) {
+    const vn = s.vn;
+    const mc = s.mc ?? [];
+    if (vn && this.winShutter && this.winLamp && this.winGlow) {
+      const gate = vn[0];
+      // Reja: sube al abrir (el hueco se queda libre) y baja al cerrar o bloquear.
+      const open = gate === 0 ? 1 : 0;
+      const sy = lerp(this.winShutter.scale.y, open ? 0.12 : 1, 0.12);
+      this.winShutter.scale.y = sy;
+      this.winShutter.position.y = 2.9 - 0.8 * sy;
+      const c = gate === WIN_BLOCKED ? 0xff3040 : gate === WIN_CLOSED ? 0xffc040 : vn[6] ? 0xff8a24 : 0x2ebd6c;
+      this.winLamp.color.setHex(c);
+      this.winGlow.material.color.setHex(c);
+      this.winGlow.material.opacity = gate === WIN_BLOCKED ? 0.35 + Math.abs(Math.sin(time * 10)) * 0.5 : 0.35;
+      this.winLabel.set(gate === WIN_BLOCKED ? "BLOQUEADA" : gate === WIN_CLOSED ? "CERRADA" : vn[6] ? "¡VIGILADA!" : "ABIERTA", `#${c.toString(16).padStart(6, "0")}`);
+    }
+    if (this.leverArm && this.leverLamp) {
+      const open = (mc[0] ?? 0) > 0;
+      this.leverArm.rotation.z = lerp(this.leverArm.rotation.z, open ? -0.9 : 0.9, 0.12);
+      this.leverLamp.color.setHex(open ? 0x2ebd6c : 0xff3040);
+    }
+    if (this.lureBtn && this.lureGlow) {
+      const active = (mc[1] ?? 0) > 0;
+      const cooling = (mc[2] ?? 0) > 0;
+      this.lureBtn.color.setHex(active ? 0x2ebd6c : cooling ? 0x5a5a68 : 0xe83e54);
+      this.lureGlow.material.color.setHex(active ? 0x2ebd6c : 0xe83e54);
+      this.lureGlow.material.opacity = cooling && !active ? 0.05 : 0.3 + Math.sin(time * 4) * 0.1;
+    }
+    if (this.seqAlarm) {
+      const alarm = (mc[3] ?? 0) > 0;
+      const order = mc.slice(5);
+      this.seqAlarm.material.opacity = alarm ? 0.4 + Math.abs(Math.sin(time * 9)) * 0.5 : 0;
+      this.seqBtns.forEach((b, k) => {
+        const at = order.indexOf(k);
+        // Con la alarma, cada botón enseña su número en la secuencia y los ya acertados se apagan.
+        b.mat.color.setHex(alarm ? (at >= 0 && at < (mc[4] ?? 0) ? 0x3a3a44 : b.color) : (b.color >> 1) & 0x7f7f7f);
+        b.label.set(alarm && at >= 0 ? `${at + 1}` : "", "#ffffff");
+      });
+    }
+  }
+
+  /** Borrachos: tambaleándose, desplomados sobre la mesa, dormidos en el suelo o grogui, según el anfitrión. */
+  private animateDrunks(s: CasinoSnap, time: number) {
+    const list = s.dk ?? [];
+    this.drunks.forEach((c, k) => {
+      const d = list[k];
+      if (!d || d[3] === DR_GONE) {
+        c.root.visible = false;
+        return;
+      }
+      c.root.visible = true;
+      const [x, z, yaw, state] = d;
+      const base = (d[5] ?? 0) * UPPER_Y;
+      const moved = Math.hypot(x - c.lastX, z - c.lastZ);
+      c.lastX = x;
+      c.lastZ = z;
+      if (moved < 1.5) c.stride += moved;
+      c.root.position.set(x, base, z);
+      c.root.rotation.set(0, yaw, 0);
+      const walking = moved > 0.001;
+      c.legs.forEach((leg, i) => (leg.rotation.x = walking ? Math.sin(c.stride * 3.2) * 0.7 * (i === 0 ? 1 : -1) : 0));
+      c.arms[0].rotation.x = walking ? Math.sin(c.stride * 3.2) * 0.5 : -0.1;
+      c.arms[1].rotation.x = -0.9 + Math.sin(time * 3 + k) * 0.15;
+      c.head.rotation.x = 0;
+      if (state === DR_SIT) {
+        // Desplomado sobre la mesa: inclinado hacia delante con los brazos colgando.
+        c.root.rotation.x = 1.15;
+        c.root.position.y = base + 0.95 + Math.sin(time * 1.4 + k) * 0.02;
+        c.arms.forEach((a) => (a.rotation.x = -2.6));
+        c.head.rotation.z = Math.sin(time * 1.1 + k) * 0.2;
+      } else if (state === DR_ASLEEP) {
+        // Tumbado de lado, respirando.
+        c.root.rotation.z = 1.5;
+        c.root.position.y = base + 0.32 + Math.sin(time * 2 + k) * 0.03;
+        c.legs.forEach((leg) => (leg.rotation.x = 0.2));
+        c.arms.forEach((a) => (a.rotation.x = 0.1));
+      } else if (state === DR_GROGGY) {
+        // Aturdido: sentado, con la cabeza dando vueltas.
+        c.root.rotation.x = -0.25;
+        c.root.position.y = base + 0.18;
+        c.head.rotation.y = Math.sin(time * 6 + k) * 0.5;
+        c.arms.forEach((a, i) => (a.rotation.x = -0.4 + Math.sin(time * 5 + i) * 0.2));
+      } else {
+        // Andando a trompicones: bamboleo de lado a lado.
+        c.root.rotation.z = Math.sin(time * 4.5 + k) * 0.16;
+        c.root.position.x += Math.cos(yaw) * Math.sin(time * 3 + k) * 0.05;
+        c.head.rotation.z = Math.sin(time * 3.7 + k) * 0.18;
+      }
+    });
+  }
+
   /** Bóveda y baño según el estado: volante, puerta, paneles, alarma y luces de «ocupado». */
   private tickProps(s: CasinoSnap, time: number) {
+    this.tickMechanisms(s, time);
     const vt = s.vt;
     if (vt && this.vaultHinge && this.vaultWheel && this.vaultAlarm) {
       const [progress, cd, a, b] = vt;
@@ -2457,24 +2702,28 @@ export class CasinoStage {
       const t = s.tb[i];
       // La mesa caliente se nota aunque esté vacía: aura de fuego, aro latiendo y «×2» en el cartel.
       const isHot = hot === i;
+      // Un borracho encima: la mesa lo dice en su cartel y el neón se pone rojo.
+      const blocked = s.bk?.[i] === 1;
       const pulse = 0.5 + Math.sin(v.time * 5 + i) * 0.5;
       rig.hotGlow.material.opacity = lerp(rig.hotGlow.material.opacity, isHot ? 0.28 + pulse * 0.2 : 0, Math.min(1, dt * 4));
       rig.hotGlow.scale.setScalar(isHot ? 5.5 + pulse * 1.2 : 5.5);
       if (!t) {
-        rig.label.set((isHot ? `×${HOT_BOOST} ` : "") + rig.def.label, `rgb(${rig.def.color[0]},${rig.def.color[1]},${rig.def.color[2]})`);
-        if (rig.glow) rig.glow.opacity = lerp(rig.glow.opacity, isHot ? 0.2 + pulse * 0.25 : 0, Math.min(1, dt * 4));
+        if (blocked) rig.label.set(`${rig.def.label} · BLOQUEADA`, "rgb(255,86,96)");
+        else rig.label.set((isHot ? `×${HOT_BOOST} ` : "") + rig.def.label, `rgb(${rig.def.color[0]},${rig.def.color[1]},${rig.def.color[2]})`);
+        if (rig.glow) rig.glow.opacity = lerp(rig.glow.opacity, blocked ? 0.35 + pulse * 0.2 : isHot ? 0.2 + pulse * 0.25 : 0, Math.min(1, dt * 4));
         continue;
       }
       const p = t.ph === PH_SPIN ? clamp01(t.pt / SPIN_TIME) : 1;
       const active = t.pr.some((x) => x === 1);
       // Neón: brilla si estás en ella o cerca.
       if (rig.glow) {
-        const on = Math.max(v.myTable === i ? 0.55 : v.near === i || active ? 0.22 : 0.0, isHot ? 0.2 + pulse * 0.25 : 0);
+        const on = Math.max(v.myTable === i ? 0.55 : v.near === i || active ? 0.22 : 0.0, isHot ? 0.2 + pulse * 0.25 : 0, blocked ? 0.35 + pulse * 0.2 : 0);
         rig.glow.opacity = lerp(rig.glow.opacity, on, Math.min(1, dt * 4));
       }
       // Cartel: nombre y estado.
       const phase = t.ph === PH_BET ? "" : t.ph === PH_SPIN ? " · GIRANDO" : t.lb ? ` · ${t.lb}` : "";
-      rig.label.set((isHot ? `×${HOT_BOOST} ` : "") + rig.def.label + phase, `rgb(${rig.def.color[0]},${rig.def.color[1]},${rig.def.color[2]})`);
+      if (blocked) rig.label.set(`${rig.def.label} · BLOQUEADA`, "rgb(255,86,96)");
+      else rig.label.set((isHot ? `×${HOT_BOOST} ` : "") + rig.def.label + phase, `rgb(${rig.def.color[0]},${rig.def.color[1]},${rig.def.color[2]})`);
       // Crupier: se balancea y, al girar, levanta los brazos; al pagar da un bote.
       const c = rig.croupier;
       const jump = t.ph === PH_PAY ? Math.max(0, 0.12 - t.pt) * 0.9 : 0;
@@ -2493,6 +2742,7 @@ export class CasinoStage {
       this.animateGame(rig, t, p, v.time);
     }
     this.animateNpcs(s, v.time);
+    this.animateDrunks(s, v.time);
     this.tickProps(s, v.time);
     // Fuga en curso: la sirena de la jaula y la caja laten en rojo.
     const breaking = (s.jb ?? []).some((p) => p > 0);
@@ -2564,8 +2814,10 @@ export class CasinoStage {
       c.root.rotation.z = n[5] ? 1.4 : 0;
       if (n[5]) c.root.position.y = base + 0.3;
       if (guard) {
-        guard.cone.material.color.setHex(chasing ? 0xff4050 : 0xfff07a);
+        // Cono: amarillo de ronda, rojo persiguiendo, verde distraído por el timbre; crece con la ronda.
+        guard.cone.material.color.setHex(chasing ? 0xff4050 : state === NPC_LURED ? 0x7affb0 : 0xfff07a);
         guard.cone.material.opacity = chasing ? 0.18 : 0.12;
+        guard.cone.scale.setScalar(roundDef(s.qs?.[0] ?? 1).sightMul);
       }
     });
   }

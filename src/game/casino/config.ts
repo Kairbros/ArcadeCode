@@ -10,9 +10,8 @@ export const MAX_SEATS = 4;
 export const EYE = 1.55;
 
 // --- Fichas ---
-/** Fichas con las que se empieza. */
-export const START_CHIPS = 100;
-/** Bono de la casa si te sientas sin fichas. */
+/** Fichas con las que se empieza, topes, rondas, guardias, borrachos y cárcel: ver `balance.ts`. */
+/** Bono de la casa si te sientas sin ninguna ficha (ni cartera ni depósito). */
 export const RESCUE = 25;
 /** Cantidades que se recorren con ↑ ↓. */
 export const BET_STEPS = [1, 5, 10, 25, 50, 100];
@@ -58,15 +57,8 @@ export const SLOT_HAND = 1;
 export const SLOT_BAT = 2;
 export const SLOT_ITEM = 3;
 
-// --- Turnos con cuota compartida ---
-/** Duración de cada turno (s): al acabar se mira si entre todos llegan a la cuota. */
-export const SHIFT_TIME = 150;
-/** Cuota del primer turno por jugador conectado; cada turno se multiplica por QUOTA_GROWTH. */
-export const QUOTA_PER_PLAYER = 150;
-export const QUOTA_GROWTH = 1.5;
-/** Premio para cada uno al cumplir la cuota. */
-export const QUOTA_BONUS = 10;
-/** Segundos que se ve el cartel de fin de turno. */
+// --- Rondas ---
+/** Segundos que se ve el cartel de fin de ronda (la duración, el objetivo y el resto están en `balance.ts`). */
 export const EVENT_TIME = 3.5;
 
 // --- Mesa caliente ---
@@ -123,6 +115,8 @@ export const NPC_RETURN = 3;
 export const NPC_PATROL = 4;
 /** Guardia que todavía no ha entrado de servicio (se activan más según el turno). */
 export const NPC_OFF = 5;
+/** Guardia atraído por el timbre: acude a él y se queda un rato. */
+export const NPC_LURED = 6;
 /** Segundos entre despistes del crupier (al azar entre los dos) y lo que dura cada despiste. */
 export const DISTRACT_MIN = 10;
 export const DISTRACT_MAX = 22;
@@ -159,8 +153,6 @@ export const SEAT_PITCH = 0.45;
 export const ROB_REACH = 2.2;
 export const ROB_MIN = 2;
 export const ROB_MAX = 4;
-/** Segundos de condena al fallar el minijuego. */
-export const JAIL_TIME = 16;
 /** Distancia para coger la basura del suelo de la celda. */
 export const JAIL_PICK = 1.8;
 /** Fuga en equipo: segundos que hay que quedarse forzando la caja para abrir la jaula. */
@@ -175,16 +167,6 @@ export const LITTER_ARC = 0.28;
 export const LITTER_STUN = 1.0;
 export const LITTER_DROP = 2;
 export const LITTER_NPC_STUN = 1.5;
-
-// --- Dificultad por turno ---
-/** Guardias de servicio en el primer turno, uno más por turno y el máximo (hay rondas para seis). */
-export const GUARDS_START = 2;
-export const GUARDS_MAX = 6;
-/** Cada turno los guardias corren algo más (m/s, con tope) y los crupieres se distraen menos. */
-export const GUARD_RUN_STEP = 0.15;
-export const GUARD_RUN_BONUS_MAX = 0.6;
-export const DISTRACT_STEP = 0.1;
-export const DISTRACT_FLOOR = 0.5;
 
 // --- Boutique de disfraces (piso de arriba) ---
 /** Disfraces de los maniquíes (el índice + 1 es el que viaja por la red), precio y duración. */

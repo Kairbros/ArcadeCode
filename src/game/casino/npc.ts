@@ -8,7 +8,7 @@
 // escapa a su perseguidor (el anfitrión avisa por radio a un guardia del otro piso).
 import {
   CATCH_R, CHASE_TIME, CROUPIER_RUN, DISTRACT_MAX, DISTRACT_MIN, DISTRACT_TIME, GUARD_CHASE_TIME, GUARD_FOV, GUARD_RUN,
-  GUARD_SIGHT, NPC_CHASE, NPC_DISTRACTED, NPC_HIT_STUN, NPC_IDLE, NPC_OFF, NPC_PATROL, NPC_RETURN, NPC_WALK,
+  GUARD_SIGHT, NPC_CHASE, NPC_DISTRACTED, NPC_HIT_STUN, NPC_IDLE, NPC_LURED, NPC_OFF, NPC_PATROL, NPC_RETURN, NPC_WALK,
 } from "./config";
 import { blocked } from "./player3d";
 import { clampToHall, croupierSpot, HALL, npcCollidersAt, ROUTES, TABLES, type Level } from "./world3d";
@@ -44,6 +44,14 @@ export interface Npc {
   /** Dificultad del turno: velocidad extra al perseguir (guardias) y factor del despiste (crupieres). */
   boost: number;
   focus: number;
+  /** Dificultad de la ronda: alcance de la vista (×), insistencia al perseguir (×) y pausa en cada punto de la ronda (s). */
+  sightMul: number;
+  chaseMul: number;
+  pause: number;
+  /** Timbre señuelo (guardias): segundos que le quedan acudiendo y adónde. */
+  lure: number;
+  lureX: number;
+  lureZ: number;
 }
 
 /** Índice del primer guardia (van detrás de los crupieres, que siguen el orden de TABLES). */
@@ -56,7 +64,7 @@ const between = (a: number, b: number) => a + Math.random() * (b - a);
 const points = (n: Npc) => ROUTES[n.route].points;
 
 export function makeNpcs(): Npc[] {
-  const base = { target: -1, stun: 0, repath: 0, boost: 0, focus: 1 };
+  const base = { target: -1, stun: 0, repath: 0, boost: 0, focus: 1, sightMul: 1, chaseMul: 1, pause: 1.8, lure: 0, lureX: 0, lureZ: 0 };
   const list: Npc[] = TABLES.map((def) => {
     const [x, z, yaw] = croupierSpot(def);
     return {
@@ -85,6 +93,7 @@ export function resetNpc(n: Npc) {
   n.state = n.guard ? NPC_OFF : NPC_IDLE;
   n.t = n.guard ? 0 : between(DISTRACT_MIN, DISTRACT_MAX);
   n.wp = 1;
+  n.lure = 0;
 }
 
 /**
@@ -108,9 +117,28 @@ export function setGuardsOn(npcs: Npc[], count: number) {
 export function startChase(n: Npc, player: number, stun = false) {
   n.state = NPC_CHASE;
   n.target = player;
-  n.t = n.guard ? GUARD_CHASE_TIME : CHASE_TIME;
+  n.t = (n.guard ? GUARD_CHASE_TIME : CHASE_TIME) * (n.guard ? n.chaseMul : 1);
   n.repath = 0;
   if (stun) n.stun = NPC_HIT_STUN;
+}
+
+/**
+ * Timbre: los guardias de servicio de ese piso que no persiguen a nadie acuden a (x, z) y esperan allí `time`
+ * segundos; luego retoman su ronda. Devuelve cuántos han acudido.
+ */
+export function lureGuards(npcs: readonly Npc[], lv: Level, x: number, z: number, time: number): number {
+  let count = 0;
+  for (const n of npcs) {
+    if (!n.guard || n.lv !== lv || n.state === NPC_OFF || n.state === NPC_CHASE) continue;
+    n.state = NPC_LURED;
+    n.lure = time;
+    n.lureX = x;
+    n.lureZ = z;
+    n.target = -1;
+    n.repath = 0;
+    count++;
+  }
+  return count;
 }
 
 /** ¿Está el punto dentro del cono de visión del NPC? (el piso lo comprueba quien llama). */
@@ -119,7 +147,7 @@ export function sees(n: Npc, x: number, z: number): boolean {
   const dx = x - n.x;
   const dz = z - n.z;
   const d = Math.hypot(dx, dz);
-  if (d > GUARD_SIGHT) return false;
+  if (d > GUARD_SIGHT * n.sightMul) return false;
   if (d < 0.5) return true;
   return (dx * -Math.sin(n.yaw) + dz * -Math.cos(n.yaw)) / d > Math.cos(GUARD_FOV);
 }
@@ -232,7 +260,7 @@ function route(lv: Level, fx: number, fz: number, tx: number, tz: number): [numb
 }
 
 /** Anda hacia (tx, tz) siguiendo el camino. Devuelve true si ya ha llegado. */
-function walk(n: Npc, tx: number, tz: number, speed: number, dt: number): boolean {
+export function walk(n: Npc, tx: number, tz: number, speed: number, dt: number): boolean {
   if (Math.hypot(tx - n.x, tz - n.z) < 0.15) return true;
   n.repath -= dt;
   if (n.repath <= 0 || Math.hypot(n.wx - n.x, n.wz - n.z) < 0.2) {
@@ -289,6 +317,17 @@ export function tickNpc(n: Npc, dt: number, bodies: readonly { x: number; z: num
     goHome(n);
     return caught;
   }
+  if (n.state === NPC_LURED) {
+    n.lure -= dt;
+    if (n.lure <= 0) {
+      goHome(n);
+      return -1;
+    }
+    // Acude deprisa y, ya en el timbre, se queda mirando a su alrededor.
+    if (n.stun > 0) return -1;
+    if (walk(n, n.lureX, n.lureZ, NPC_WALK * 1.5, dt)) n.yaw += Math.sin(n.lure * 2.2) * 0.02;
+    return -1;
+  }
   if (n.state === NPC_RETURN) {
     if (n.guard) {
       const [px, pz] = points(n)[n.wp];
@@ -315,7 +354,7 @@ export function tickNpc(n: Npc, dt: number, bodies: readonly { x: number; z: num
     const pts = points(n);
     if (walk(n, pts[n.wp][0], pts[n.wp][1], NPC_WALK, dt)) {
       n.wp = (n.wp + 1) % pts.length;
-      n.t = 1.8;
+      n.t = n.pause;
       n.lookYaw = n.yaw;
     }
     return -1;

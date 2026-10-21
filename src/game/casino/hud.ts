@@ -7,6 +7,10 @@ import {
   BET_TIME, C_ACCENT, C_BG, C_DIM, C_GOLD, C_GREEN, C_LINE, C_LOSE, C_PANEL, C_TEXT, C_WIN, CH, CW, HOT_BOOST, ITEM_BANANA,
   DISGUISE_COST, DISGUISES, EMOTES, ITEM_COST, ITEM_DICE, ITEM_MAGNET, ITEM_NAMES, ITEM_NONE, NPC_CHASE, NPC_IDLE, PAY_TIME, ROB_ZONE, SLOT_BAT, SLOT_HAND, SLOT_ITEM, SLOT_NAMES,
 } from "./config";
+import { DEPOSIT_STEPS, JAIL_PENALTY, ROUNDS, ROUND_COUNT, roundDef } from "./balance";
+import { SEQ_NAMES } from "./mech";
+import { DR_GONE, DR_SIT } from "./drunk";
+import { pickAmount, roomFor, WIN_BLOCKED, WIN_CLOSED } from "./ventanilla";
 import { GAME_TITLE, SPOTS, type CasinoSnap, type TableSnap } from "./table";
 import { TABLES, VAULT_PADS } from "./world3d";
 
@@ -25,7 +29,7 @@ const SEAT_Y = 126;
 const FOOT_Y = 228;
 /** Panel del turno (debajo de la franja de arriba) y fila de avisos debajo de él. */
 const SHIFT_Y = 18;
-const NOTICE_Y = 46;
+const NOTICE_Y = 56;
 
 export interface HudView {
   s: CasinoSnap;
@@ -40,6 +44,17 @@ export interface HudView {
   jailSwitch: boolean;
   /** Estoy delante de una puerta del baño (me puedo esconder). */
   bath: boolean;
+  /** Ventanilla abierta en mi pantalla y opción elegida del selector. */
+  win: boolean;
+  winSel: number;
+  /** Estoy junto a la ventanilla, la palanca, el timbre, un botón de la alarma (0..3 o -1) o un borracho. */
+  nearWin: boolean;
+  nearLever: boolean;
+  nearLure: boolean;
+  nearSeq: number;
+  nearDrunk: boolean;
+  /** Recarga (s) de «apartar borracho». */
+  pushCd: number;
   /** Segundos que me quedan escondido en el baño (0 = fuera). */
   hidden: number;
   /** Recarga de la zancadilla (0 = lista). */
@@ -114,7 +129,9 @@ export function drawHud(ctx: Ctx, v: HudView) {
   }
 
   drawShift(ctx, v);
+  drawStatus(ctx, v);
   if (v.hidden > 0) drawHidden(ctx, v);
+  else if (v.win) drawWindowUi(ctx, v);
   else if (table && v.myTable >= 0) drawTableUi(ctx, v, table);
   else drawWalkUi(ctx, v);
   drawVault(ctx, v);
@@ -139,32 +156,171 @@ export function drawHud(ctx: Ctx, v: HudView) {
   text(ctx, "R: REINICIAR", CW - 6, FOOT_Y, C_DIM, TINY, "right");
 }
 
-/** Reloj del turno, cuota compartida con su barra de progreso y la mesa caliente. */
+/** Reloj de la ronda, objetivo del equipo con su barra, progreso de la ronda y la mesa caliente. */
 function drawShift(ctx: Ctx, v: HudView) {
   const q = v.s.qs;
   if (!q) return;
-  const [shift, left, quota, total] = q;
-  const met = total >= quota;
-  const hurry = left <= 20 && !met;
+  const [round, left, goal, total] = q;
+  const def = roundDef(round);
+  const boss = v.s.bs === 1;
+  const met = total >= goal;
+  const hurry = left <= 20 && !met && !boss;
   const clock = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
-  const label = `TURNO ${shift} · ${clock} · CUOTA ${total}/${quota}`;
+  const label = boss ? `RONDA ${ROUND_COUNT}/${ROUND_COUNT} SUPERADA · JEFE PRÓXIMAMENTE` : `RONDA ${round}/${ROUND_COUNT} · ${clock} · ${total}/${goal}`;
   const w = Math.min(CW - 20, textWidth(ctx, label, SMALL) + 16);
   const x = CW / 2 - w / 2;
   // Parpadea en rojo los últimos segundos si todavía no llegan.
   const blink = hurry && Math.floor(v.time * 4) % 2 === 0;
-  roundRect(ctx, x, SHIFT_Y, w, 15, 4, blink ? C_LOSE : C_PANEL, met ? C_GREEN : C_ACCENT, 1);
+  roundRect(ctx, x, SHIFT_Y, w, 15, 4, blink ? C_LOSE : C_PANEL, met || boss ? C_GREEN : C_ACCENT, 1);
   text(ctx, fitText(ctx, label, w - 8, SMALL), CW / 2, SHIFT_Y + 2, C_TEXT, SMALL, "center");
-  const k = Math.max(0, Math.min(1, total / Math.max(1, quota)));
+  // Dos barras finas: el objetivo del equipo (grande) y el tiempo de la ronda (debajo).
+  const k = Math.max(0, Math.min(1, total / Math.max(1, goal)));
   ctx.fillStyle = `rgb(${C_BG[0]},${C_BG[1]},${C_BG[2]})`;
   ctx.fillRect(x + 4, SHIFT_Y + 10, w - 8, 3);
-  const c = met ? C_GREEN : C_ACCENT;
+  const c = met || boss ? C_GREEN : C_ACCENT;
   ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
   ctx.fillRect(x + 4, SHIFT_Y + 10, Math.round((w - 8) * k), 3);
+  const t = boss ? 1 : Math.max(0, Math.min(1, 1 - left / Math.max(1, def.time)));
+  ctx.fillStyle = `rgba(${C_LINE[0]},${C_LINE[1]},${C_LINE[2]},0.18)`;
+  ctx.fillRect(x + 4, SHIFT_Y + 14, w - 8, 1);
+  ctx.fillStyle = `rgb(${C_LINE[0]},${C_LINE[1]},${C_LINE[2]})`;
+  ctx.fillRect(x + 4, SHIFT_Y + 14, Math.round((w - 8) * t), 1);
+  shadowText(ctx, fitText(ctx, boss ? "SALA DEL JEFE · LA VENTANILLA ESPERA" : `${def.name} · ${def.objective}`, CW - 16, TINY), CW / 2, SHIFT_Y + 18, C_DIM, TINY, "center");
   const hot = v.s.ht;
-  if (hot && hot[0] >= 0) {
+  if (hot && hot[0] >= 0 && !boss) {
     const name = GAME_TITLE[TABLES[hot[0]].kind] + (TABLES[hot[0]].lv ? " (ARRIBA)" : "");
-    shadowText(ctx, `MESA CALIENTE: ${name} ×${HOT_BOOST} · ${hot[1]}s`, CW / 2, SHIFT_Y + 18, C_GOLD, TINY, "center");
+    shadowText(ctx, `MESA CALIENTE: ${name} ×${HOT_BOOST} · ${hot[1]}s`, CW / 2, SHIFT_Y + 26, C_GOLD, TINY, "center");
   }
+}
+
+/** Panel de estado (izquierda): ventanilla, topes, retorno, guardias, borrachos, mesas y mecanismos de la ronda. */
+function drawStatus(ctx: Ctx, v: HudView) {
+  const s = v.s;
+  const vn = s.vn;
+  if (!vn || v.win || v.hidden > 0) return;
+  const [gate, cap, dep, limit, ret, round, watched] = vn;
+  const me = v.me;
+  const mine = s.dp?.[me] ?? 0;
+  const guards = (s.np ?? []).filter((n, k) => k >= TABLES.length && n[3] !== 5).length;
+  const drunks = (s.dk ?? []).filter((d) => d[3] !== DR_GONE).length;
+  const seated = v.myTable >= 0;
+  const lines: { t: string; c: readonly [number, number, number] }[] = [];
+  const gc = gate === WIN_BLOCKED ? C_LOSE : gate === WIN_CLOSED ? C_GOLD : C_GREEN;
+  lines.push({ t: `VENTANILLA: ${gate === WIN_BLOCKED ? "BLOQUEADA" : gate === WIN_CLOSED ? "CERRADA" : "ABIERTA"}${watched ? " · VIGILADA" : ""}`, c: watched && gate === 0 ? C_LOSE : gc });
+  lines.push({ t: `TOPE ${dep}/${cap} · TU LÍMITE ${mine}/${limit}`, c: C_TEXT });
+  lines.push({ t: `EQUIPO ${s.qs?.[3] ?? 0} / OBJETIVO ${s.qs?.[2] ?? 0}`, c: (s.qs?.[3] ?? 0) >= (s.qs?.[2] ?? 1) ? C_GREEN : C_TEXT });
+  lines.push({ t: `RETORNO ×${(ret / 100).toFixed(2)} · GUARDIAS ${guards} · BORRACHOS ${drunks}`, c: C_DIM });
+  const mc = s.mc ?? [];
+  const def = ROUNDS[Math.max(1, Math.min(ROUND_COUNT, round)) - 1];
+  if (def.mech.leverOpen > 0) lines.push({ t: mc[0] > 0 ? `REJA ABIERTA ${Math.ceil(mc[0])}s` : "REJA CERRADA · PALANCA (ESTE)", c: mc[0] > 0 ? C_GREEN : C_GOLD });
+  if (def.mech.lure > 0) lines.push({ t: mc[1] > 0 ? `TIMBRE: GUARDIAS DISTRAÍDOS ${Math.ceil(mc[1])}s` : mc[2] > 0 ? `TIMBRE RECARGA ${Math.ceil(mc[2])}s` : "TIMBRE LISTO (OESTE)", c: mc[1] > 0 ? C_GREEN : C_DIM });
+  if (def.mech.seqLen > 0) {
+    const order = mc.slice(5).map((k) => SEQ_NAMES[k]).join("-");
+    lines.push({ t: mc[3] > 0 ? `ALARMA ${Math.ceil(mc[3])}s: ${order} (${mc[4]}/${mc.length - 5})` : "ALARMA: EN VIGILANCIA (ENTREPISO)", c: mc[3] > 0 ? C_LOSE : C_DIM });
+  }
+  lines.push({ t: `RIESGOS: CÁRCEL −${Math.round(JAIL_PENALTY * 100)}% CARTERA · BORRACHO: APUESTA CONFIRMADA`, c: C_DIM });
+  const w = 150;
+  const x = 3;
+  let y = 52 + 7;
+  // Sentado, el panel de la mesa ya ocupa la pantalla: solo quedan las lámparas de las mesas.
+  const shown = seated ? [] : lines;
+  const h = shown.length * 7 + 14;
+  ctx.fillStyle = "rgba(34,16,40,0.66)";
+  ctx.fillRect(x, y - 3, w + 4, h);
+  for (const l of shown) {
+    text(ctx, fitText(ctx, l.t, w, TINY), x + 3, y, l.c, TINY);
+    y += 7;
+  }
+  // Mesas: una casilla por mesa (libre, ocupada o bloqueada por un borracho).
+  const bk = s.bk ?? [];
+  TABLES.forEach((_, i) => {
+    const busy = (s.tb[i]?.pr ?? []).some((p) => p === 1);
+    const c = bk[i] === 1 ? C_LOSE : busy ? C_GOLD : C_DIM;
+    ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+    ctx.fillRect(x + 3 + i * 7, y + 1, 5, 4);
+    if (v.myTable === i) {
+      ctx.strokeStyle = `rgb(${C_TEXT[0]},${C_TEXT[1]},${C_TEXT[2]})`;
+      ctx.strokeRect(x + 2.5 + i * 7, y + 0.5, 6, 5);
+    }
+  });
+  text(ctx, "MESAS", x + 3 + TABLES.length * 7 + 2, y, C_DIM, TINY);
+  // Contador de monedas (derecha): cartera y depósito.
+  const wallet = chipsOf(s, me);
+  const stake = s.sk?.[me] ?? 0;
+  roundRect(ctx, 3, 18, 74, 16, 3, C_PANEL, C_GOLD, 1);
+  text(ctx, `CARTERA ${wallet}`, 7, 20, C_GOLD, TINY);
+  text(ctx, `DEPÓSITO ${stake}`, 7, 27, C_GREEN, TINY);
+}
+
+/** Ventanilla: saldos, topes, retorno, selector de cantidad y riesgos. Sirve para depositar, no para comprar. */
+function drawWindowUi(ctx: Ctx, v: HudView) {
+  const s = v.s;
+  const vn = s.vn ?? [0, 0, 0, 0, 100, 1, 0];
+  const [gate, cap, dep, limit, ret] = vn;
+  const me = v.me;
+  const wallet = chipsOf(s, me);
+  const mine = s.dp?.[me] ?? 0;
+  const room = roomFor(wallet, limit, mine, cap, dep);
+  const amount = pickAmount(v.winSel, room);
+  const w = 262, h = 134;
+  const x = CW / 2 - w / 2, y = 37;
+  roundRect(ctx, x, y, w, h, 6, C_BG, C_ACCENT, 2);
+  const open = gate === 0;
+  const stateText = gate === WIN_BLOCKED ? "BLOQUEADA POR LA ALARMA" : gate === WIN_CLOSED ? "CERRADA · REJA ECHADA" : vn[6] ? "ABIERTA · ¡UN GUARDIA TE VE!" : "ABIERTA";
+  const sc = gate === WIN_BLOCKED ? C_LOSE : gate === WIN_CLOSED ? C_GOLD : vn[6] ? C_LOSE : C_GREEN;
+  shadowText(ctx, "VENTANILLA · DEPÓSITO DE APUESTAS", x + 8, y + 6, C_TEXT, MID);
+  text(ctx, `ESTADO: ${stateText}`, x + 8, y + 18, sc, SMALL);
+  // Cifras.
+  const row = (label: string, value: string, yy: number, c: readonly [number, number, number] = C_TEXT) => {
+    text(ctx, label, x + 8, yy, C_DIM, SMALL);
+    text(ctx, value, x + 140, yy, c, SMALL, "right");
+  };
+  row("CARTERA (SALDO)", `${wallet}`, y + 30, C_GOLD);
+  row("DEPOSITADO EN LA RONDA", `${mine}`, y + 40);
+  row("TU LÍMITE RESTANTE", `${Math.max(0, limit - mine)} / ${limit}`, y + 50);
+  row("TOPE GLOBAL DISPONIBLE", `${Math.max(0, cap - dep)} / ${cap}`, y + 60);
+  row("DEPÓSITO PARA APOSTAR", `${s.sk?.[me] ?? 0}`, y + 70, C_GREEN);
+  // Barra del tope global.
+  const bw = 126;
+  ctx.fillStyle = `rgb(${C_PANEL[0]},${C_PANEL[1]},${C_PANEL[2]})`;
+  ctx.fillRect(x + 8, y + 80, bw, 4);
+  ctx.fillStyle = `rgb(${C_ACCENT[0]},${C_ACCENT[1]},${C_ACCENT[2]})`;
+  ctx.fillRect(x + 8, y + 80, Math.round(bw * Math.min(1, dep / Math.max(1, cap))), 4);
+  // Retorno y ganancia potencial.
+  const r = ret / 100;
+  text(ctx, `RETORNO DE LA RONDA ×${r.toFixed(2)}`, x + 152, y + 30, C_GOLD, SMALL);
+  text(ctx, `SI ACIERTAS (×2): +${Math.round(amount * r)}`, x + 152, y + 40, C_WIN, SMALL);
+  text(ctx, `RECUPERABLE: ${amount}`, x + 152, y + 50, C_TEXT, SMALL);
+  text(ctx, "RIESGOS ACTIVOS", x + 152, y + 62, C_LOSE, SMALL);
+  text(ctx, fitText(ctx, `CÁRCEL: −${Math.round(JAIL_PENALTY * 100)}% DE LA CARTERA`, 104, TINY), x + 152, y + 71, C_DIM, TINY);
+  text(ctx, fitText(ctx, "EL DEPÓSITO ESTÁ A SALVO", 104, TINY), x + 152, y + 78, C_DIM, TINY);
+  text(ctx, fitText(ctx, "BORRACHO: APUESTA CONFIRMADA", 104, TINY), x + 152, y + 85, C_DIM, TINY);
+  // Selector de cantidad.
+  const sw = 34;
+  DEPOSIT_STEPS.forEach((st, i) => {
+    const sel = i === v.winSel;
+    const xx = x + 8 + i * (sw + 4);
+    const val = st === 0 ? room : st;
+    roundRect(ctx, xx, y + 89, sw, 18, 3, sel ? C_ACCENT : C_PANEL, sel ? C_ACCENT : C_LINE, 1);
+    text(ctx, st === 0 ? "MÁX" : `${st}`, xx + sw / 2, y + 92, sel ? C_BG : C_TEXT, SMALL, "center");
+    text(ctx, `${val}`, xx + sw / 2, y + 99, sel ? C_BG : C_DIM, TINY, "center");
+  });
+  const can = open && amount > 0;
+  text(ctx, "DEPOSITAR", x + w - 8, y + 89, can ? C_WIN : C_DIM, SMALL, "right");
+  text(ctx, `${amount}`, x + w - 8, y + 98, can ? C_WIN : C_DIM, MID, "right");
+  // Todos los jugadores: saldo y depósito.
+  let col = 0;
+  for (let i = 0; i < 4; i++) {
+    if (s.on[i] !== 1) continue;
+    const color = PLAYER_COLORS[i] ?? PLAYER_COLORS[0];
+    ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
+    const xx = x + 8 + col * 62;
+    ctx.fillRect(xx, y + 112, 3, 6);
+    text(ctx, fitText(ctx, `${PLAYER_NAMES[i]}${i === me ? "*" : ""} ${s.ch[i] ?? 0}+${s.sk?.[i] ?? 0}`, 56, TINY), xx + 5, y + 113, i === me ? C_TEXT : C_DIM, TINY);
+    col++;
+  }
+  text(ctx, "CARTERA+DEPÓSITO", x + w - 8, y + 113, C_DIM, TINY, "right");
+  text(ctx, "↑↓←→ CANTIDAD · ENTER DEPOSITA · E SALE · AQUÍ NO SE COMPRA", x + w / 2, y + 125, C_DIM, TINY, "center");
 }
 
 /** Te persigue un NPC: marco rojo que late y aviso de correr. */
@@ -205,13 +361,13 @@ function drawEvent(ctx: Ctx, v: HudView) {
   const ev = v.s.ev;
   if (!ev || !ev.length) return;
   const [kind, left] = ev;
-  const ok = kind === 1;
+  const ok = kind === 1 || kind === 3;
   ctx.globalAlpha = Math.min(1, left * 2);
   const w = 220, h = 40;
   const x = CW / 2 - w / 2, y = CH / 2 - 44;
   roundRect(ctx, x, y, w, h, 6, ok ? C_GREEN : C_LOSE, C_LINE, 2);
-  shadowText(ctx, ok ? "¡CUOTA CUMPLIDA!" : "¡LA CASA COBRA!", CW / 2, y + 8, C_TEXT, MID, "center");
-  const sub = ok ? `SIGUIENTE TURNO · MÁS DIFÍCIL` : `TODOS A LA CÁRCEL · RÉCORD ${v.s.qs?.[4] ?? 0} TURNOS`;
+  shadowText(ctx, kind === 3 ? "¡PREPARADOS PARA EL JEFE!" : ok ? "¡RONDA SUPERADA!" : "¡LA CASA COBRA!", CW / 2, y + 8, C_TEXT, MID, "center");
+  const sub = kind === 3 ? "LAS CINCO RONDAS SUPERADAS" : ok ? `SIGUIENTE: RONDA ${v.s.qs?.[0] ?? 1} · MÁS TOPE, MENOS RETORNO` : `TODOS A LA CÁRCEL · RÉCORD ${v.s.qs?.[4] ?? 0} RONDAS`;
   text(ctx, sub, CW / 2, y + 24, C_TEXT, SMALL, "center");
   ctx.globalAlpha = 1;
 }
@@ -326,16 +482,29 @@ function drawNotice(ctx: Ctx, v: HudView) {
   if (v.noticeT <= 0 || !v.notice) return;
   const bad = v.notice.startsWith("¡");
   const w = Math.min(CW - 30, textWidth(ctx, v.notice, SMALL) + 16);
+  // Con la ventanilla abierta el aviso va debajo del panel (no tapa las cifras).
+  const ny = v.win ? 175 : NOTICE_Y;
   ctx.globalAlpha = Math.min(1, v.noticeT * 2.5);
-  roundRect(ctx, CW / 2 - w / 2, NOTICE_Y, w, 13, 3, bad ? C_LOSE : C_ACCENT, bad ? C_LOSE : C_ACCENT, 1);
-  text(ctx, fitText(ctx, v.notice, w - 8, SMALL), CW / 2, NOTICE_Y + 4, C_BG, SMALL, "center");
+  roundRect(ctx, CW / 2 - w / 2, ny, w, 13, 3, bad ? C_LOSE : C_ACCENT, bad ? C_LOSE : C_ACCENT, 1);
+  text(ctx, fitText(ctx, v.notice, w - 8, SMALL), CW / 2, ny + 4, C_BG, SMALL, "center");
   ctx.globalAlpha = 1;
 }
 
 /** Andando por la sala: aviso de mesa cercana, ratón y controles. */
 function drawWalkUi(ctx: Ctx, v: HudView) {
-  const hint = v.near >= 0
+  const seqName = v.nearSeq >= 0 ? SEQ_NAMES[v.nearSeq] : "";
+  const hint = v.nearDrunk
+    ? v.pushCd > 0 ? `APARTAR BORRACHO · RECARGA ${Math.ceil(v.pushCd)} s` : "E · APARTAR BORRACHO (LO DEJAS DORMIDO Y LA MESA QUEDA LIBRE)"
+    : v.near >= 0
     ? `E · SENTARSE EN ${GAME_TITLE[TABLES[v.near].kind]}`
+    : v.nearWin
+    ? "E · VENTANILLA: DEPOSITAR MONEDAS PARA APOSTAR"
+    : v.nearLever
+    ? "E · PALANCA: ABRE LA REJA DE LA VENTANILLA"
+    : v.nearLure
+    ? "E · TIMBRE: DISTRAE A LOS GUARDIAS DE LA PLANTA BAJA"
+    : v.nearSeq >= 0
+    ? `E · BOTÓN ${seqName} (SECUENCIA DE LA ALARMA)`
     : v.shop
       ? `E · COMPRAR TRUCO SORPRESA (${ITEM_COST} FICHAS)`
       : v.jailSwitch
@@ -351,9 +520,9 @@ function drawWalkUi(ctx: Ctx, v: HudView) {
               : v.stair
                 ? "ESCALERA AL ENTREPISO · SUBE ANDANDO"
                 : "SHIFT CORRER · ESPACIO SALTAR · CLIC USAR · Q ZANCADILLA · 5-8 EMOTES";
-  const lit = v.near >= 0 || v.shop || v.bath || v.litter || v.mannequin >= 0 || (v.jailSwitch && prisoners(v) > 0);
+  const lit = v.near >= 0 || v.shop || v.bath || v.litter || v.mannequin >= 0 || (v.jailSwitch && prisoners(v) > 0) || v.nearDrunk || v.nearWin || v.nearLever || v.nearLure || v.nearSeq >= 0;
   const w = Math.min(CW - 20, textWidth(ctx, hint, SMALL) + 18);
-  roundRect(ctx, CW / 2 - w / 2, 150, w, 14, 4, lit ? C_ACCENT : C_PANEL, lit ? C_ACCENT : C_LINE, 1);
+  roundRect(ctx, CW / 2 - w / 2, 150, w, 14, 4, v.nearDrunk ? C_LOSE : lit ? C_ACCENT : C_PANEL, v.nearDrunk ? C_LOSE : lit ? C_ACCENT : C_LINE, 1);
   text(ctx, fitText(ctx, hint, w - 10, SMALL), CW / 2, 154, lit ? C_BG : C_TEXT, SMALL, "center");
   // Cerca de una mesa: ¿mira el crupier? Si no, se le puede robar con la mano.
   const croupier = v.near >= 0 ? v.s.np?.[v.near] : undefined;
@@ -484,6 +653,22 @@ function drawTableUi(ctx: Ctx, v: HudView, t: TableSnap) {
   const state = t.ph === 0 ? (left <= 5 ? `APUESTAS ${left} SEG` : "APUESTAS ABIERTAS") : t.ph === 1 ? "GIRANDO…" : "PAGOS";
   text(ctx, state, 8, SEAT_Y - 10, t.ph === 0 && left <= 5 ? C_GOLD : C_TEXT, TINY);
 
+  // --- Mesa bloqueada por un borracho ---
+  const blocked = (v.s.bk ?? [])[v.myTable] === 1;
+  const stakeNow = v.s.sk?.[v.me] ?? 0;
+  if (blocked) {
+    const dr = (v.s.dk ?? []).find((d) => d[4] === v.myTable && d[3] === DR_SIT);
+    const label = `¡MESA BLOQUEADA POR UN BORRACHO!${dr ? ` ${Math.ceil(dr[6])} s` : ""}`;
+    const ww = Math.min(CW - 20, textWidth(ctx, label, SMALL) + 18);
+    roundRect(ctx, CW / 2 - ww / 2, NOTICE_Y + 16, ww, 14, 3, C_LOSE, C_LOSE, 1);
+    text(ctx, label, CW / 2, NOTICE_Y + 20, C_BG, SMALL, "center");
+    text(ctx, "NO SE PUEDE APOSTAR · UN COMPAÑERO PUEDE APARTARLO (E)", CW / 2, NOTICE_Y + 33, C_TEXT, TINY, "center");
+  } else if (stakeNow < 1 && t.ph === 0) {
+    text(ctx, "SIN DEPÓSITO PARA APOSTAR · USA LA VENTANILLA", CW / 2, NOTICE_Y + 20, C_GOLD, SMALL, "center");
+  }
+  text(ctx, `DEPÓSITO ${stakeNow}`, CW - 8, SEAT_Y - 10, C_GREEN, TINY, "right");
+  const retNow = (v.s.vn?.[4] ?? 100) / 100;
+
   // --- Franja de apuestas ---
   const spots = SPOTS[TABLES[v.myTable].kind];
   const n = spots.length;
@@ -497,12 +682,15 @@ function drawTableUi(ctx: Ctx, v: HudView, t: TableSnap) {
     const sel = betting && !locked && i === v.selSpot;
     roundRect(ctx, x, STRIP_Y, w, 16, 3, sel ? C_ACCENT : C_PANEL, sel ? C_ACCENT : C_LINE, 1);
     text(ctx, fitText(ctx, spot.label, w - 4, SMALL), x + w / 2, STRIP_Y + 2, sel ? C_BG : betting ? C_TEXT : C_DIM, SMALL, "center");
-    if (spot.mult > 0) text(ctx, `×${spot.mult}`, x + w / 2, STRIP_Y + 9, sel ? C_BG : C_GOLD, TINY, "center");
+    // Premio real de la ronda: lo que sobra de la ficha se multiplica por el retorno.
+    if (spot.mult > 0) text(ctx, `×${(spot.mult >= 1 ? 1 + (spot.mult - 1) * retNow : spot.mult).toFixed(1)}`, x + w / 2, STRIP_Y + 9, sel ? C_BG : C_GOLD, TINY, "center");
     x += w + 4;
   });
 
   // --- Teclas de la mesa ---
-  const hint = betting
+  const hint = blocked
+    ? "E: LEVANTARSE Y AYUDAR · EL RELOJ DE LA MESA ESTÁ PARADO"
+    : betting
     ? locked ? "ENTER: CAMBIAR LA APUESTA · E: LEVANTARSE" : "←→ CASILLA · ↑↓ FICHAS · ENTER LISTO · E: LEVANTARSE"
     : "E: LEVANTARSE";
   text(ctx, fitText(ctx, hint, CW - 16, TINY), 8, STRIP_Y - 10, C_DIM, TINY);

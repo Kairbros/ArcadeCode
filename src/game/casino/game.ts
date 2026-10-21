@@ -6,26 +6,33 @@ import type { Transport } from "../net/protocol";
 import type { GuestGame, HostGame, NetFrame } from "../net/types";
 import {
   LITTER_ARC, LITTER_DROP, LITTER_NPC_STUN, LITTER_REACH, LITTER_RESPAWN, LITTER_STUN,
-  DISGUISE_COST, DISGUISE_TIME, DISGUISES, DISTRACT_FLOOR, DISTRACT_STEP, EMOTE_BUBBLES, EMOTE_TIME, EMOTES, GUARD_RUN_BONUS_MAX,
-  GUARD_RUN_STEP, GUARDS_MAX, GUARDS_START, NPC_OFF,
+  DISGUISE_COST, DISGUISE_TIME, DISGUISES, EMOTE_BUBBLES, EMOTE_TIME, EMOTES, NPC_OFF,
   AIR_SAFE, BANANA_LIFE, BANANA_MAX, BANANA_R, BAT_CD, BREAK_TIME, HIDE_MAX, HIDE_SEEN, TRIP_CD, TRIP_DROP, TRIP_FOOT,
   TRIP_NPC_STUN, TRIP_R, TRIP_STUN, TRIP_WINDOW, VAULT_CD, VAULT_DECAY, VAULT_LOOT, VAULT_TIME, BODY_R, BUMP, CH, CW, DROP_LIFE, DROP_MAX, EVENT_TIME, GRAB_CD, GRAB_HOLD,
   GRAB_REACH, GRAB_STEAL, HIT_ARC, HIT_REACH, HIT_STUN, HOT_BOOST, HOT_TIME, ITEM_BANANA, ITEM_COST, ITEM_DICE, ITEM_MAGNET,
-  ITEM_NAMES, ITEM_NONE, JAIL_PICK, JAIL_TIME, KNOCK, MAGNET_PICK, MAGNET_R, MAGNET_TIME, MOUSE_PITCH, MOUSE_TURN,
-  NPC_CHASE, NPC_DISTRACTED, NPC_IDLE, PICK_REACH, PITCH_MAX, QUOTA_BONUS, QUOTA_GROWTH, QUOTA_PER_PLAYER, REACH, RESCUE,
-  ROB_MAX, ROB_REACH, ROB_SPEED, ROB_ZONE, SHIFT_TIME, SLIP_DROP, SLIP_STUN, SLOT_BAT, SLOT_COINS, SLOT_HAND, SLOT_ITEM,
-  START_CHIPS, STEAL_MAX, TABLE_ROB_CD, TABLE_ROB_MAX, TABLE_ROB_MIN, TABLE_ROB_REACH,
+  ITEM_NAMES, ITEM_NONE, JAIL_PICK, KNOCK, MAGNET_PICK, MAGNET_R, MAGNET_TIME, MOUSE_PITCH, MOUSE_TURN,
+  NPC_CHASE, NPC_DISTRACTED, NPC_IDLE, PICK_REACH, PITCH_MAX, REACH, RESCUE,
+  ROB_MAX, ROB_REACH, ROB_SPEED, ROB_ZONE, SLIP_DROP, SLIP_STUN, SLOT_BAT, SLOT_COINS, SLOT_HAND, SLOT_ITEM,
+  STEAL_MAX, TABLE_ROB_CD, TABLE_ROB_MAX, TABLE_ROB_MIN, TABLE_ROB_REACH,
 } from "./config";
+import {
+  DEPOSIT_STEPS, DRUNK_POOL, goalFor, jailLoss, params, PUSH_CD, PUSH_REACH, ROUND_COUNT, START_COINS, type RoundParams,
+} from "./balance";
+import { alive, blocking, EV_GONE, EV_LEFT_TABLE, EV_SAT, EV_WOKE, leave, makeDrunk, putToSleep, retarget, snapDrunk, spawnDrunk, tickDrunk, DR_ASLEEP, DR_GONE, DR_GROGGY, DR_SIT, DR_WALK, type Drunk } from "./drunk";
+import * as E from "./events";
+import { Mechanisms } from "./mech";
+import { playEvent } from "./sfx";
+import { pickAmount, roomFor, Ventanilla, type WinGate } from "./ventanilla";
 import { drawHud, type HudView } from "./hud";
 import { lookMode, type CasinoInput } from "./input";
-import { goHome, isGuard, makeNpcs, npcInFront, resetNpc, sees, setGuardsOn, snapNpc, startChase, tickNpc } from "./npc";
+import { goHome, isGuard, lureGuards, makeNpcs, npcInFront, resetNpc, sees, setGuardsOn, snapNpc, startChase, tickNpc } from "./npc";
 import { bodyColliders, jump, Stamina, stairStep, stepJump, stepPlayer, type Body3 } from "./player3d";
 import { CasinoStage } from "./scene";
 import { GAME_TITLE, SPOTS, Table, type CasinoSnap, type TableSnap } from "./table";
 import {
-  BATH, BATH_DOORS, clampToHall, clampToJail, COLLIDERS, JAIL, JAIL_LEVER, JAIL_SPOT, JAIL_TRASH, nearBath,
-  LITTER, nearLitter, nearMannequin, nearShop, nearStairFoot, nearSwitch, nearTable, onVaultPad, seatSpot, SPAWNS, standSpot,
-  TABLES, UPPER_Y,
+  BATH, BATH_DOORS, clampToHall, clampToJail, COLLIDERS, JAIL, JAIL_LEVER, JAIL_SPOT, JAIL_TRASH, LURE_STAND, nearBath,
+  LITTER, nearLever, nearLitter, nearLure, nearMannequin, nearSeq, nearShop, nearStairFoot, nearSwitch, nearTable, nearWindow,
+  onVaultPad, seatSpot, SPAWNS, standSpot, TABLES, UPPER_Y, WINDOW_STAND,
   zoneAt, type Level,
 } from "./world3d";
 
@@ -51,6 +58,8 @@ export interface CasinoMsg {
   jy?: number;
   /** Piso en el que está (0 planta baja, 1 entrepiso): las escaleras las sube él. */
   lv?: number;
+  /** Monedas que pide depositar (acción 100). */
+  dv?: number;
 }
 
 /** Estado de pelea de un jugador en el anfitrión. */
@@ -119,6 +128,14 @@ function drawNames(ctx: CanvasRenderingContext2D, stage: CasinoStage, s: CasinoS
     const label = jailed > 0 ? `J${i + 1} · PRESO ${Math.ceil(jailed)}s` : `J${i + 1} · ${s.ch[i]}`;
     shadowText(ctx, fitText(ctx, label, 70, "5px"), at[0], at[1], jailed > 0 ? [255, 120, 120] : [235, 235, 245], "5px", "center");
   }
+  // Borrachos: «¡HIC!» al llegar, «¡MESA OCUPADA!» sobre la mesa y «zZz» dormidos (con los segundos que les quedan).
+  (s.dk ?? []).forEach((d) => {
+    if (d[3] === DR_GONE) return;
+    const at = stage.project(d[0], (d[5] ?? 0) * UPPER_Y + (d[3] === DR_ASLEEP ? 1.0 : 2.5), d[1]);
+    if (!at || at[2] > 28) return;
+    const label = d[3] === DR_SIT ? `¡MESA OCUPADA! ${Math.ceil(d[6])}s` : d[3] === DR_ASLEEP ? `zZz ${Math.ceil(d[6])}s` : d[3] === DR_GROGGY ? "¿Qué…?" : "¡HIC!";
+    shadowText(ctx, label, at[0], at[1], d[3] === DR_SIT ? [255, 86, 96] : d[3] === DR_ASLEEP ? [150, 200, 255] : [255, 214, 120], "6px", "center");
+  });
   // NPC: «zZ» sobre el crupier distraído (se le puede robar la mesa) y «!» sobre quien persigue a alguien.
   (s.np ?? []).forEach((n, k) => {
     const chasing = n[3] === NPC_CHASE;
@@ -142,7 +159,10 @@ export class CasinoHost implements HostGame {
   /** No hay final: se sale con Esc o se cambia de juego con J. */
   readonly finished = true;
   readonly tables = TABLES.map((t) => new Table(t.kind));
-  readonly chips = Array.from({ length: 4 }, () => START_CHIPS);
+  /** Cartera de cada jugador (la que se roba, se gasta y pierde el 50 % en la cárcel). */
+  readonly chips = Array.from({ length: 4 }, () => START_COINS);
+  /** Ventanilla: depósitos de la ronda (con ellos se apuesta en las mesas) con sus topes y límites. */
+  readonly win = new Ventanilla();
   readonly bodies: Body3[];
   /** Mesa de cada jugador (-1 = andando). */
   readonly seated = [-1, -1, -1, -1];
@@ -169,13 +189,34 @@ export class CasinoHost implements HostGame {
   private trashTaken = -1;
   /** Minijuego del robo en curso (solo el jugador local). */
   private rob: { target: number; cursor: number; dir: number; zone: number } | null = null;
-  /** Turno en curso, segundos que le quedan y récord de turnos superados. */
-  private shift = 1;
-  private shiftT = SHIFT_TIME;
+  /** Ronda en curso (1..ROUND_COUNT), segundos que le quedan, récord de rondas superadas y su dificultad. */
+  private round = 1;
+  private roundT = 0;
   private best = 0;
-  /** Cartel de fin de turno (1 cumplida, 2 fallada) y sus segundos. */
+  private rp: RoundParams = params(1, 1);
+  /** Objetivo de la ronda (cartera + depósitos del equipo) y lo que había al empezar. */
+  private goal = 0;
+  private startTotal = 0;
+  /** Jugadores que se contaron al preparar la ronda (si cambian, se reajustan topes y dificultad). */
+  private counted = 1;
+  /** Superadas las cinco rondas: sala del jefe. Punto de extensión de la fase 2 (ver `onBossReady`). */
+  bossGate = false;
+  /** La fase 2 se engancha aquí: se llama una vez al superar la ronda 5 con el estado de la partida. */
+  onBossReady: ((state: { players: number; wallets: number[]; round: number }) => void) | null = null;
+  /** Cartel de fin de ronda (1 superada, 2 fallada, 3 jefe) y sus segundos. */
   private event = 0;
   private eventT = 0;
+  /** Mecanismos de la ronda, borrachos, recarga de «apartar» y sucesos recientes. */
+  private readonly mech = new Mechanisms();
+  readonly drunks: Drunk[] = Array.from({ length: DRUNK_POOL }, makeDrunk);
+  private drunkT = 0;
+  private readonly pushCd = [0, 0, 0, 0];
+  private readonly events: { e: number[]; at: number }[] = [];
+  private evSeq = 0;
+  /** Ventanilla abierta en mi pantalla (solo local), opción del selector y número de operación. */
+  winUi = false;
+  winSel = 0;
+  private depOp = 0;
   /** Mesa caliente y segundos que le quedan. */
   private hot = 0;
   private hotT = HOT_TIME;
@@ -217,6 +258,7 @@ export class CasinoHost implements HostGame {
     this.bodies = SPAWNS.map(([x, z], i) => ({ x, z, yaw: 0, stride: i * 0.7 }));
     for (let i = 1; i <= Math.min(3, remoteCount); i++) this.online[i] = true;
     this.pickHot(true);
+    this.startRound();
   }
 
   // --- Entrada ---------------------------------------------------------------------------
@@ -229,19 +271,21 @@ export class CasinoHost implements HostGame {
     this.input.poll();
     const slot = this.input.takeSlot();
     if (slot >= 0) this.slot = slot;
+    if (this.winUi && (this.jail[0] > 0 || this.hidden[0] > 0 || this.seated[0] >= 0 || this.fight[0].stun > 0)) this.winUi = false;
     if (this.hidden[0] > 0) this.hiddenInput(dt);
     else if (this.jail[0] > 0) this.jailInput(dt);
+    else if (this.winUi) this.windowInput(dt);
     else if (this.seated[0] >= 0) this.seatedInput();
     else this.walkInput(dt);
     // En la celda o sentado no se corre: se recupera el aliento (en el baño, el doble de rápido).
-    if (this.jail[0] > 0 || this.seated[0] >= 0) this.running = this.stamina.step(false, false, dt);
+    if (this.jail[0] > 0 || this.seated[0] >= 0 || this.winUi) this.running = this.stamina.step(false, false, dt);
     if (this.hidden[0] > 0) this.running = this.stamina.step(false, false, dt * 2);
     // En la escalera la altura es la del peldaño, no la del salto.
     if ((this.bodies[0].st ?? -1) < 0) stepJump(this.bodies[0], dt);
     this.tickDifficulty();
     this.tickLooks(dt);
     this.tickRob(dt);
-    for (const t of this.tables) t.update(dt, this.chips, this.luck);
+    for (const t of this.tables) t.update(dt, this.win.stake, this.luck, this.rp.ret);
     for (let i = 0; i < 4; i++) this.magnet[i] = Math.max(0, this.magnet[i] - dt);
     this.tickDrops(dt);
     this.tickBananas(dt);
@@ -253,7 +297,9 @@ export class CasinoHost implements HostGame {
     this.tickBreak(dt);
     this.tickHide(dt);
     this.tickVault(dt);
-    this.tickShift(dt);
+    this.tickMech(dt);
+    this.tickDrunks(dt);
+    this.tickRound(dt);
   }
 
   /** Fuera del salón (en la jaula o escondido en el baño): ni le ven, ni le pegan, ni choca. */
@@ -268,15 +314,22 @@ export class CasinoHost implements HostGame {
     return this.bodies[i].lv ?? 0;
   }
 
-  // --- Dificultad por turno ----------------------------------------------------------------
-  /** Más turno, más guardias de servicio, más rápidos, y crupieres que se distraen menos rato. */
+  // --- Dificultad por ronda ----------------------------------------------------------------
+  /** Aplica a los guardias y crupieres la dificultad de la ronda (cada fotograma: los guardias entran o salen de servicio). */
   private tickDifficulty() {
-    const step = this.shift - 1;
-    setGuardsOn(this.npcs, Math.min(GUARDS_MAX, GUARDS_START + step));
+    setGuardsOn(this.npcs, this.rp.guards);
     for (const n of this.npcs) {
-      n.boost = Math.min(GUARD_RUN_BONUS_MAX, GUARD_RUN_STEP * step);
-      n.focus = Math.max(DISTRACT_FLOOR, 1 - DISTRACT_STEP * step);
+      n.boost = this.rp.guardBoost;
+      n.focus = this.rp.focus;
+      n.sightMul = this.rp.sightMul;
+      n.chaseMul = this.rp.chaseMul;
+      n.pause = this.rp.patrolPause;
     }
+  }
+
+  /** Jugadores conectados. */
+  private playersNow(): number {
+    return Math.max(1, this.online.filter(Boolean).length);
   }
 
   // --- Disfraces y emotes ------------------------------------------------------------------
@@ -463,8 +516,7 @@ export class CasinoHost implements HostGame {
     const b = this.bodies[player];
     const seen = this.npcs.some((n) => n.state === NPC_CHASE && n.target === player && n.lv === this.lvOf(player) && Math.hypot(n.x - b.x, n.z - b.z) < HIDE_SEEN);
     if (seen) {
-      this.sendToJail(player, true);
-      if (player === 0) this.say("¡TE VIO ENTRAR! A LA CÁRCEL");
+      this.sendToJail(player, true, "guardia");
       return;
     }
     const chased = this.npcs.some((n) => n.state === NPC_CHASE && n.target === player);
@@ -621,8 +673,7 @@ export class CasinoHost implements HostGame {
     for (const n of this.npcs) {
       const caught = tickNpc(n, dt, this.bodies, (i) => this.online[i] && !this.away(i) && this.lvOf(i) === n.lv);
       if (caught < 0) continue;
-      this.sendToJail(caught, true);
-      if (caught === 0) this.say(n.guard ? "¡EL GUARDIA TE ATRAPÓ! A LA CÁRCEL" : "¡EL CRUPIER TE ATRAPÓ! A LA CÁRCEL");
+      this.sendToJail(caught, true, n.guard ? "guardia" : "crupier");
     }
   }
 
@@ -692,46 +743,275 @@ export class CasinoHost implements HostGame {
     this.witness(player);
   }
 
-  // --- Turnos con cuota compartida ---------------------------------------------------------
-  /** Cuota del turno: crece con los jugadores conectados y con cada turno superado. */
-  private quota(): number {
-    const players = this.online.filter(Boolean).length;
-    return Math.round(QUOTA_PER_PLAYER * players * Math.pow(QUOTA_GROWTH, this.shift - 1));
-  }
-
-  /** Fichas de todos los conectados (la cuota se cumple entre todos). */
+  // --- Rondas ------------------------------------------------------------------------------
+  /** Cartera + depósitos de los conectados (el objetivo de la ronda se cumple entre todos). */
   private total(): number {
-    return this.chips.reduce((sum, c, i) => sum + (this.online[i] ? c : 0), 0);
+    return this.chips.reduce((sum, c, i) => sum + (this.online[i] ? c + this.win.stake[i] : 0), 0);
   }
 
-  /** Reloj del turno: al acabar, premio para todos o la casa cobra (cárcel y vuelta a empezar). */
-  private tickShift(dt: number) {
+  /** Prepara la ronda `this.round`: topes, objetivo, mecanismos, guardias y borrachos según ronda y jugadores. */
+  private startRound() {
+    this.counted = this.playersNow();
+    this.rp = params(this.round, this.counted);
+    this.win.open(this.rp.cap, this.rp.limit);
+    this.mech.start(this.rp.mech);
+    this.roundT = this.rp.time;
+    this.startTotal = this.total();
+    this.goal = goalFor(this.rp, this.startTotal);
+    this.drunkT = this.rp.drunk.every;
+    for (const d of this.drunks) this.dismissDrunk(d);
+    this.winUi = false;
+    this.emit(E.EVT_ROUND_START, -1, this.round);
+  }
+
+  /** Si entra o sale alguien en mitad de la ronda, se reajustan topes y dificultad (lo ya depositado se respeta). */
+  private refreshPlayers() {
+    const n = this.playersNow();
+    if (n === this.counted) return;
+    this.counted = n;
+    this.rp = params(this.round, n);
+    this.win.cap = this.rp.cap;
+    this.win.limit = this.rp.limit;
+  }
+
+  /** Reloj de la ronda: al acabar se liquidan los depósitos y se mira si el equipo cumplió el objetivo. */
+  private tickRound(dt: number) {
     this.eventT = Math.max(0, this.eventT - dt);
-    this.shiftT -= dt;
-    if (this.shiftT > 0) return;
-    if (this.total() >= this.quota()) {
-      for (let i = 0; i < 4; i++) if (this.online[i]) this.chips[i] += QUOTA_BONUS;
-      this.best = Math.max(this.best, this.shift);
-      this.shift++;
+    while (this.events.length && this.time - this.events[0].at > 6) this.events.shift();
+    if (this.bossGate) return;
+    this.refreshPlayers();
+    this.roundT -= dt;
+    if (this.roundT > 0) return;
+    this.endRound();
+  }
+
+  private endRound() {
+    // Ninguna apuesta queda a medias y todo depósito vuelve a la cartera (cada jugador ve cuánto).
+    for (const t of this.tables) t.cancelBets();
+    const back = this.win.settle(this.chips);
+    for (let i = 0; i < 4; i++) if (this.online[i] && back[i] > 0) this.emit(E.EVT_PAYOUT, i, back[i]);
+    this.winUi = false;
+    if (this.total() >= this.goal) {
+      this.best = Math.max(this.best, this.round);
+      this.emit(E.EVT_ROUND_WIN, -1, this.round);
+      if (this.round >= ROUND_COUNT) {
+        // Superadas las cinco: se queda esperando al jefe (fase 2). Nada de jefes de mentira.
+        this.bossGate = true;
+        this.event = 3;
+        this.eventT = EVENT_TIME * 2;
+        this.emit(E.EVT_BOSS, -1, 0);
+        this.onBossReady?.({ players: this.playersNow(), wallets: this.chips.slice(), round: this.round });
+        for (const d of this.drunks) this.dismissDrunk(d);
+        return;
+      }
+      this.round++;
       this.event = 1;
-      this.say(`¡CUOTA CUMPLIDA! +${QUOTA_BONUS} A CADA UNO`);
     } else {
       for (let i = 0; i < 4; i++) {
         if (!this.online[i]) continue;
         this.sendToJail(i, false);
-        this.chips[i] = START_CHIPS;
+        this.chips[i] = START_COINS;
         this.items[i] = ITEM_NONE;
         this.magnet[i] = 0;
         this.luck[i] = 0;
       }
       this.drops.length = 0;
       this.bananas.length = 0;
-      this.shift = 1;
+      this.round = 1;
       this.event = 2;
-      this.say("¡LA CASA COBRA! TODOS A LA CÁRCEL");
+      this.emit(E.EVT_ROUND_LOSE, -1, 0);
     }
-    this.shiftT = SHIFT_TIME;
     this.eventT = EVENT_TIME;
+    this.startRound();
+  }
+
+  // --- Sucesos y avisos --------------------------------------------------------------------
+  /** Registra un suceso para todas las pantallas y, si me afecta, lo avisa aquí. */
+  private emit(kind: number, player: number, value: number) {
+    const e = [++this.evSeq, kind, player, Math.round(value)];
+    this.events.push({ e, at: this.time });
+    const text = E.eventText(e, 0);
+    if (text) {
+      this.say(text);
+      playEvent(kind);
+    }
+  }
+
+  // --- Ventanilla --------------------------------------------------------------------------
+  /** Estado de la ventanilla ahora mismo (reja y alarma). */
+  private gate(): WinGate {
+    return this.mech.gate();
+  }
+
+  /** Guardia de la planta baja que tiene la ventanilla en su cono de visión (o -1). Solo cuenta si la ronda vigila. */
+  private windowWatchedBy(): number {
+    if (!this.rp.mech.watched) return -1;
+    return this.npcs.findIndex((n) => n.guard && n.state !== NPC_OFF && n.lv === 0 && sees(n, WINDOW_STAND[0], WINDOW_STAND[1]));
+  }
+
+  /** ¿Puede este jugador operar en la ventanilla (cerca, libre y en pie)? */
+  private canUseWindow(player: number): boolean {
+    const b = this.bodies[player];
+    return this.online[player] && this.seated[player] < 0 && !this.away(player) && this.fight[player].stun <= 0 && nearWindow(b.x, b.z, this.lvOf(player));
+  }
+
+  /**
+   * Depósito del jugador (cartera → depósito). Se valida TODO aquí, en el anfitrión y de uno en uno: saldo,
+   * límite individual, tope global, reja/alarma, vigilancia y operación repetida. Si falla, no cambia nada.
+   */
+  private deposit(player: number, amount: number, op?: number) {
+    if (!this.canUseWindow(player) || this.bossGate) return;
+    const guard = this.windowWatchedBy();
+    const res = this.win.deposit(player, amount, this.chips, this.gate(), { op, watched: guard >= 0, jailed: this.jail[player] > 0 });
+    if (res.ok) {
+      this.emit(E.EVT_DEPOSIT, player, res.amount);
+      return;
+    }
+    if (res.reason === "duplicada") return;
+    this.emit(E.EVT_DEPOSIT_FAIL, player, E.FAILS.indexOf(res.reason));
+    // Depositar a la vista de un guardia lo delata: sale a por ti.
+    if (res.reason === "vigilada") this.chase(guard, player);
+  }
+
+  // --- Mecanismos: palanca, timbre y botones de la alarma ----------------------------------
+  private pullLever(player: number) {
+    const b = this.bodies[player];
+    if (this.seated[player] >= 0 || this.away(player) || !nearLever(b.x, b.z, this.lvOf(player))) return;
+    if (this.mech.pullLever()) this.emit(E.EVT_LEVER, player, this.rp.mech.leverOpen);
+    else if (player === 0) this.say(this.mech.hasLever() ? "LA PALANCA SE ESTÁ RECOLOCANDO" : "ESTA RONDA NO HAY REJA: LA VENTANILLA SIEMPRE ABRE");
+  }
+
+  private pressLure(player: number) {
+    const b = this.bodies[player];
+    if (this.seated[player] >= 0 || this.away(player) || !nearLure(b.x, b.z, this.lvOf(player))) return;
+    const res = this.mech.pressLure();
+    if (res === "ok") this.emit(E.EVT_LURE, player, lureGuards(this.npcs, 0, LURE_STAND[0], LURE_STAND[1] - 1.2, this.rp.mech.lure));
+    else if (player === 0) this.say(res === "cd" ? `EL TIMBRE RECARGA · ${Math.ceil(this.mech.lureCd)} s` : "ESTA RONDA EL TIMBRE NO SIRVE");
+  }
+
+  private pressSeq(player: number) {
+    const b = this.bodies[player];
+    if (this.seated[player] >= 0 || this.away(player)) return;
+    const k = nearSeq(b.x, b.z, this.lvOf(player));
+    if (k < 0) return;
+    const res = this.mech.pressSeq(k);
+    if (res === "ok") this.emit(E.EVT_SEQ_OK, player, this.mech.progress);
+    else if (res === "done") this.emit(E.EVT_ALARM_OFF, player, 0);
+    else if (res === "wrong") {
+      this.emit(E.EVT_SEQ_WRONG, player, 0);
+      this.witness(player);
+    } else if (res === "idle" && player === 0) this.say("NO HAY ALARMA: NADA QUE APAGAR");
+  }
+
+  /** Reloj de los mecanismos y avisos de la alarma. */
+  private tickMech(dt: number) {
+    const was = this.mech.alarmT > 0;
+    this.mech.tick(dt);
+    if (!was && this.mech.alarmT > 0) this.emit(E.EVT_ALARM, -1, this.rp.mech.seqLen);
+    if (this.mech.expired) {
+      this.mech.expired = false;
+      this.emit(E.EVT_ALARM_END, -1, 0);
+    }
+  }
+
+  // --- Borrachos ---------------------------------------------------------------------------
+  /** Quita de escena a un borracho (y libera su mesa si la bloqueaba). */
+  private dismissDrunk(d: Drunk) {
+    if (blocking(d) && d.table >= 0) this.tables[d.table].release();
+    d.ds = DR_GONE;
+    d.table = -1;
+  }
+
+  /** Mesa a la que mandar a un borracho: sin otro borracho encima y mejor si hay gente sentada. */
+  private pickDrunkTable(): number {
+    const taken = new Set(this.drunks.filter(alive).map((d) => d.table));
+    const w = this.tables.map((t, i): number => (taken.has(i) ? 0 : t.players().length ? 3 : 1));
+    const sum = w.reduce((a, b) => a + b, 0);
+    if (sum <= 0) return -1;
+    let r = Math.random() * sum;
+    for (let i = 0; i < w.length; i++) {
+      r -= w[i];
+      if (r < 0) return i;
+    }
+    return w.length - 1;
+  }
+
+  private blockFor(): number {
+    const [lo, hi] = this.rp.drunk.block;
+    return lo + Math.random() * (hi - lo);
+  }
+
+  /** Llegadas, bloqueos, sueños y despertares de los borrachos. */
+  private tickDrunks(dt: number) {
+    for (const d of this.drunks) {
+      const ev = tickDrunk(d, dt);
+      if (ev === EV_SAT) this.drunkSits(d);
+      else if (ev === EV_LEFT_TABLE) this.tables[d.table].release();
+      else if (ev === EV_WOKE) {
+        const t = this.pickDrunkTable();
+        if (t >= 0 && Math.random() < this.rp.drunk.rejoin) retarget(d, t, this.blockFor());
+        else leave(d);
+      } else if (ev === EV_GONE) d.table = -1;
+    }
+    for (let i = 0; i < 4; i++) this.pushCd[i] = Math.max(0, this.pushCd[i] - dt);
+    if (this.bossGate) return;
+    this.drunkT -= dt;
+    if (this.drunkT > 0) return;
+    this.drunkT = this.rp.drunk.every * (0.7 + Math.random() * 0.6);
+    const free = this.drunks.find((d) => !alive(d));
+    const live = this.drunks.filter(alive).length;
+    if (!free || live >= this.rp.drunk.maxAlive || Math.random() >= this.rp.drunk.chance) return;
+    const t = this.pickDrunkTable();
+    if (t >= 0) spawnDrunk(free, t, this.blockFor());
+  }
+
+  /** Se desploma sobre la mesa: queda bloqueada y quien tuviera una apuesta confirmada la pierde (una sola vez). */
+  private drunkSits(d: Drunk) {
+    const lost = this.tables[d.table].interrupt(this.win.stake);
+    this.emit(E.EVT_DRUNK_SAT, -1, d.table);
+    lost.forEach((v, i) => {
+      if (v > 0) this.emit(E.EVT_DRUNK_LOSS, i, v);
+    });
+  }
+
+  /** Borracho al alcance de `player` (andando o desplomado sobre una mesa del mismo piso) o -1. */
+  private drunkNear(player: number): number {
+    const b = this.bodies[player];
+    let best = -1;
+    let bestD = PUSH_REACH;
+    this.drunks.forEach((d, k) => {
+      if ((d.ds !== DR_SIT && d.ds !== DR_WALK) || d.lv !== this.lvOf(player)) return;
+      const dist = Math.hypot(d.x - b.x, d.z - b.z);
+      if (dist < bestD) {
+        bestD = dist;
+        best = k;
+      }
+    });
+    return best;
+  }
+
+  /**
+   * «Apartar borracho»: lo intenta quien está de pie junto a él (sentado no puedes). Con éxito se duerme
+   * `sleep` s y la mesa queda libre; el intento tiene recarga para no usarse sin parar.
+   */
+  private pushDrunk(player: number): boolean {
+    if (this.seated[player] >= 0 || this.away(player) || this.fight[player].stun > 0) return false;
+    const k = this.drunkNear(player);
+    if (k < 0) return false;
+    if (this.pushCd[player] > 0) {
+      if (player === 0) this.say(`ESPERA · RECUPERANDO EL ALIENTO ${Math.ceil(this.pushCd[player])} s`);
+      return true;
+    }
+    this.pushCd[player] = PUSH_CD;
+    const d = this.drunks[k];
+    if (Math.random() < this.rp.drunk.push) {
+      const table = d.table;
+      if (putToSleep(d, this.rp.drunk.sleep) && table >= 0) this.tables[table].release();
+      this.emit(E.EVT_PUSH_OK, player, this.rp.drunk.sleep);
+    } else {
+      this.emit(E.EVT_PUSH_FAIL, player, 0);
+    }
+    return true;
   }
 
   // --- Mesa caliente -----------------------------------------------------------------------
@@ -1003,7 +1283,13 @@ export class CasinoHost implements HostGame {
       const near = nearTable(body.x, body.z, REACH, lv);
       const dummy = nearMannequin(body.x, body.z, lv);
       const litter = nearLitter(body.x, body.z, lv, (k) => this.litterTaken(k));
-      if (near >= 0) this.sit(0, near);
+      if (this.pushDrunk(0)) {
+        // «Apartar borracho» (con recarga): va antes que sentarse, porque el borracho está justo en la mesa.
+      } else if (near >= 0) this.sit(0, near);
+      else if (nearWindow(body.x, body.z, lv)) this.openWindow();
+      else if (nearLever(body.x, body.z, lv)) this.pullLever(0);
+      else if (nearLure(body.x, body.z, lv)) this.pressLure(0);
+      else if (nearSeq(body.x, body.z, lv) >= 0) this.pressSeq(0);
       else if (litter >= 0 && this.carry[0] < 0) this.pickLitter(0, litter);
       else if (nearShop(body.x, body.z, lv)) this.buy(0);
       else if (nearSwitch(body.x, body.z, lv)) this.startBreak(0);
@@ -1050,13 +1336,45 @@ export class CasinoHost implements HostGame {
       this.input.clear();
       return;
     }
-    const chips = this.chips[0];
+    const chips = this.win.stake[0];
     if (this.input.take("betLeft")) t.setSpot(0, t.bets[0].spot - 1);
     if (this.input.take("betRight")) t.setSpot(0, t.bets[0].spot + 1);
     if (this.input.take("betUp")) t.bump(0, 1, chips);
     if (this.input.take("betDown")) t.bump(0, -1, chips);
     // Enter o clic: listo (o cambiar la apuesta). Saltar y la zancadilla no valen sentado.
     if (this.input.take("ok") || this.input.takeClick()) t.toggleLock(0, chips);
+    this.input.take("use");
+    this.input.take("jump");
+    this.input.take("trip");
+  }
+
+  /** Abre la ventanilla en mi pantalla (inmóvil mientras la uso). */
+  private openWindow() {
+    if (this.bossGate) {
+      this.say("LA VENTANILLA ESPERA AL JEFE FINAL");
+      return;
+    }
+    this.winUi = true;
+    this.winSel = 0;
+    const b = this.bodies[0];
+    b.x = WINDOW_STAND[0] + Math.max(-1, Math.min(1, b.x - WINDOW_STAND[0]));
+    b.z = Math.min(b.z, WINDOW_STAND[1]);
+    b.yaw = Math.PI;
+    b.pitch = 0;
+  }
+
+  /** Con la ventanilla abierta: elegir cantidad (←→↑↓), ENTER deposita y E sale. */
+  private windowInput(dt: number) {
+    this.look(dt);
+    const n = DEPOSIT_STEPS.length;
+    if (this.input.take("sit")) {
+      this.winUi = false;
+      this.input.clear();
+      return;
+    }
+    if (this.input.take("betUp") || this.input.take("betRight")) this.winSel = (this.winSel + 1) % n;
+    if (this.input.take("betDown") || this.input.take("betLeft")) this.winSel = (this.winSel + n - 1) % n;
+    if (this.input.take("ok") || this.input.takeClick()) this.deposit(0, this.win.pick(this.winSel, 0, this.chips[0]), ++this.depOp);
     this.input.take("use");
     this.input.take("jump");
     this.input.take("trip");
@@ -1115,9 +1433,18 @@ export class CasinoHost implements HostGame {
   }
 
   /** A la cárcel del techo: aparece en la celda y no sale hasta cumplir. */
-  private sendToJail(i: number, caught: boolean) {
+  private sendToJail(i: number, caught: boolean, by: "guardia" | "crupier" | "robo" = "robo") {
+    // Ya preso: una captura repetida no vuelve a cobrar ni a reiniciar la condena (un solo castigo por captura).
+    if (caught && this.jail[i] > 0) return;
     if (i === 0) this.trashTaken = -1;
-    this.jail[i] = JAIL_TIME;
+    if (caught) {
+      // La cárcel quita la mitad de la cartera (el depósito de la ventanilla está a salvo). Independiente de apuestas y borrachos.
+      const lost = jailLoss(this.chips[i]);
+      this.chips[i] -= lost;
+      this.emit(by === "guardia" ? E.EVT_JAIL_GUARD : by === "crupier" ? E.EVT_JAIL_CROUPIER : E.EVT_JAIL_ROB, i, lost);
+    }
+    if (i === 0) this.winUi = false;
+    this.jail[i] = this.rp.jailTime;
     if (this.seated[i] >= 0) this.stand(i);
     const b = this.bodies[i];
     b.x = JAIL_SPOT[0];
@@ -1135,7 +1462,7 @@ export class CasinoHost implements HostGame {
     this.fight[i].stun = 0;
     this.fight[i].grabBy = -1;
     this.fight[i].grabTarget = -1;
-    if (i === 0) this.say(caught ? "¡TE PILLARON! A LA CÁRCEL" : "¡A LA CÁRCEL!");
+    if (i === 0 && !caught) this.say("¡A LA CÁRCEL!");
   }
 
   /** Bate (1) o mano (2): busca a quién dar. */
@@ -1366,7 +1693,7 @@ export class CasinoHost implements HostGame {
     this.seated[player] = table;
     this.tables[table].sit(player, true);
     this.dropLitter(player);
-    if (this.chips[player] < 1) this.chips[player] += RESCUE;
+    if (this.chips[player] + this.win.stake[player] < 1) this.chips[player] += RESCUE;
   }
 
   private stand(player: number) {
@@ -1386,7 +1713,7 @@ export class CasinoHost implements HostGame {
     if (code !== "KeyR") return;
     for (let i = 0; i < 4; i++) {
       if (this.seated[i] >= 0) this.stand(i);
-      this.chips[i] = START_CHIPS;
+      this.chips[i] = START_COINS;
       this.fight[i].stun = 0;
       this.fight[i].grabBy = -1;
       this.fight[i].grabTarget = -1;
@@ -1412,10 +1739,15 @@ export class CasinoHost implements HostGame {
     this.emoteT.fill(0);
     this.vaultP = 0;
     this.vaultCd = 0;
-    this.shift = 1;
-    this.shiftT = SHIFT_TIME;
+    this.win.reset();
+    this.jail.fill(0);
+    this.pushCd.fill(0);
+    this.bossGate = false;
+    this.round = 1;
+    this.best = 0;
     this.eventT = 0;
     this.noticeT = 0;
+    this.startRound();
   }
 
   // --- Estado ----------------------------------------------------------------------------
@@ -1443,7 +1775,7 @@ export class CasinoHost implements HostGame {
       cg: [0, 1, 2, 3].map((i) => this.fightSnap(i)),
       co: this.drops.map((d) => [r1(d.x), r1(d.z), r1(d.t), d.lv]),
       ja: this.jail.map((v) => Math.round(v * 10) / 10),
-      qs: [this.shift, Math.max(0, Math.ceil(this.shiftT)), this.quota(), this.total(), this.best],
+      qs: [this.round, Math.max(0, Math.ceil(this.roundT)), this.goal, this.total(), this.best],
       ht: [this.hot, Math.max(0, Math.ceil(this.hotT))],
       it: this.items.map((v, i) => [v, r1(this.magnet[i]), this.luck[i]]),
       bn: this.bananas.map((b) => [r1(b.x), r1(b.z), b.lv]),
@@ -1457,6 +1789,15 @@ export class CasinoHost implements HostGame {
       em: [...this.emote],
       lt: this.litterT.map((t, k) => (this.litterTaken(k) ? 1 : 0)),
       cy: [...this.carry],
+      sk: [...this.win.stake],
+      vn: [this.gate(), this.win.cap, this.win.total(), this.win.limit, Math.round(this.rp.ret * 100), this.round, this.windowWatchedBy() >= 0 ? 1 : 0],
+      dp: [...this.win.deposited],
+      mc: this.mech.snap(),
+      bk: this.tables.map((t) => (t.blocked ? 1 : 0)),
+      dk: this.drunks.map(snapDrunk),
+      pc: this.pushCd.map((v) => Math.round(v * 10) / 10),
+      ne: this.events.filter((v) => this.time - v.at < 4).map((v) => v.e),
+      bs: this.bossGate ? 1 : 0,
     };
   }
 
@@ -1525,12 +1866,22 @@ export class CasinoHost implements HostGame {
       this.pickLitter(index, action - 40);
     } else if (action === 39) {
       this.throwLitter(index);
+    } else if (action === 100) {
+      this.deposit(index, num(m.dv, 0), id);
+    } else if (action === 101) {
+      this.pushDrunk(index);
+    } else if (action === 102) {
+      this.pullLever(index);
+    } else if (action === 103) {
+      this.pressLure(index);
+    } else if (action === 104) {
+      this.pressSeq(index);
     }
     const sit = this.seated[index];
     if (sit < 0) return;
     const t = this.tables[sit];
     const lock = int(m.lk, 0) === 1;
-    const chips = this.chips[index];
+    const chips = this.win.stake[index];
     if (t.bets[index].locked && !lock) t.toggleLock(index, chips);
     t.setSpot(index, int(m.sp, 0));
     t.setAmount(index, int(m.am, 1), chips);
@@ -1542,6 +1893,9 @@ export class CasinoHost implements HostGame {
     this.online[index] = false;
     this.stand(index);
     this.hidden[index] = 0;
+    // Su depósito vuelve a su cartera (no se queda atrapado en la ventanilla).
+    this.chips[index] += this.win.stake[index];
+    this.win.stake[index] = 0;
   }
 
   // --- Dibujo ------------------------------------------------------------------------------
@@ -1564,6 +1918,14 @@ export class CasinoHost implements HostGame {
       shop: free && near < 0 && nearShop(body.x, body.z, lv),
       jailSwitch: free && near < 0 && nearSwitch(body.x, body.z, lv),
       bath: free && near < 0 && nearBath(body.x, body.z, lv) >= 0,
+      win: this.winUi,
+      winSel: this.winSel,
+      nearWin: free && nearWindow(body.x, body.z, lv),
+      nearLever: free && nearLever(body.x, body.z, lv),
+      nearLure: free && nearLure(body.x, body.z, lv),
+      nearSeq: free ? nearSeq(body.x, body.z, lv) : -1,
+      nearDrunk: free && this.drunkNear(0) >= 0,
+      pushCd: this.pushCd[0],
       hidden: this.hidden[0],
       tripCd: this.tripCd[0],
       selSpot: this.seated[0] >= 0 ? this.tables[this.seated[0]].bets[0].spot : 0,
@@ -1635,7 +1997,11 @@ export class CasinoGuest implements GuestGame {
   /** Lo último que se vio de objeto, mesa caliente y fin de turno (para avisar al cambiar). */
   private lastItem = ITEM_NONE;
   private lastHot = -1;
-  private lastEvent = 0;
+  private lastEvSeq = -1;
+  private lastStake = -1;
+  /** Ventanilla abierta en mi pantalla y opción del selector. */
+  private winUi = false;
+  private winSel = 0;
   /** NPC que me perseguía en el último estado (-1 = ninguno). */
   private lastChaser = -1;
   /** Aguante para correr y si estoy corriendo este fotograma. */
@@ -1679,11 +2045,13 @@ export class CasinoGuest implements GuestGame {
     }
     // Aviso al ganar o perder monedas de pie (robos y monedas del suelo).
     const chips = s.ch[this.index] ?? 0;
-    if (this.lastChips >= 0 && chips !== this.lastChips && this.myTable < 0) {
+    const stakeNow = s.sk?.[this.index] ?? 0;
+    if (this.lastChips >= 0 && chips !== this.lastChips && this.myTable < 0 && stakeNow === this.lastStake) {
       const dif = chips - this.lastChips;
       this.say(`${dif > 0 ? "+" : ""}${dif} MONEDA${Math.abs(dif) === 1 ? "" : "S"}`);
     }
     this.lastChips = chips;
+    this.lastStake = stakeNow;
     // Trucos, mesa caliente y fin de turno: lo decide el anfitrión, aquí solo se avisa del cambio.
     const item = s.it?.[this.index]?.[0] ?? ITEM_NONE;
     if (item !== ITEM_NONE && this.lastItem === ITEM_NONE) {
@@ -1694,17 +2062,23 @@ export class CasinoGuest implements GuestGame {
     const hot = s.ht?.[0] ?? -1;
     if (hot >= 0 && this.lastHot >= 0 && hot !== this.lastHot) this.say(`¡MESA CALIENTE: ${GAME_TITLE[TABLES[hot].kind]}${TABLES[hot].lv ? " (ARRIBA)" : ""} ×${HOT_BOOST}!`);
     this.lastHot = hot;
-    const ev = s.ev?.[0] ?? 0;
-    if (ev && ev !== this.lastEvent) this.say(ev === 1 ? `¡CUOTA CUMPLIDA! +${QUOTA_BONUS} A CADA UNO` : "¡LA CASA COBRA! TODOS A LA CÁRCEL");
-    this.lastEvent = ev;
+    // Sucesos (cárcel, depósitos, borrachos, mecanismos, rondas): cada uno se avisa una sola vez, por su número.
+    const news = s.ne ?? [];
+    if (this.lastEvSeq < 0) this.lastEvSeq = news.reduce((m, e) => Math.max(m, e[0]), 0);
+    for (const e of news) {
+      if (e[0] <= this.lastEvSeq) continue;
+      this.lastEvSeq = e[0];
+      const text = E.eventText(e, this.index);
+      if (text) {
+        this.say(text);
+        playEvent(e[1]);
+      }
+    }
     // Persecuciones: aviso al empezar y, si acabo en la cárcel con alguien detrás, es que me atrapó.
     const chaser = chaserOf(s, this.index);
     if (chaser >= 0 && this.lastChaser < 0) this.say(isGuard(chaser) ? "¡EL GUARDIA TE PERSIGUE! ¡CORRE!" : "¡EL CRUPIER TE PERSIGUE! ¡CORRE!");
     else if (chaser >= 0 && chaser !== this.lastChaser) this.say("¡AVISO POR RADIO! TE BUSCA OTRO GUARDIA");
     const jail = s.ja?.[this.index] ?? 0;
-    if (jail > 0 && !this.wasJailed && this.lastChaser >= 0) {
-      this.say(isGuard(this.lastChaser) ? "¡EL GUARDIA TE ATRAPÓ! A LA CÁRCEL" : "¡EL CRUPIER TE ATRAPÓ! A LA CÁRCEL");
-    }
     this.lastChaser = chaser;
     // Disfraz: lo decide el anfitrión (al comprarlo o cuando un guardia sospecha).
     const dg = s.dg?.[this.index]?.[0] ?? 0;
@@ -1771,12 +2145,13 @@ export class CasinoGuest implements GuestGame {
   }
 
   /** Manda posición y apuesta al anfitrión (y el golpe, si toca). */
-  private send(lock: number, action = 0) {
+  private send(lock: number, action = 0, dv = 0) {
     this.pending = {
       t: "c", i: ++this.actionId, s: 0,
       x: r2(this.body.x), z: r2(this.body.z), yaw: r2(this.body.yaw), tb: this.myTable,
       sp: this.selSpot, am: this.selAmount, lk: lock,
       ca: action || undefined,
+      dv: dv || undefined,
       jy: r2(this.body.y ?? 0) || undefined,
       lv: this.body.lv ?? 0,
     };
@@ -1903,6 +2278,36 @@ export class CasinoGuest implements GuestGame {
     this.say("BASURA EN LA MANO · CLIC: TIRAR");
   }
 
+  /** ¿Hay un borracho al alcance (según el último estado)? */
+  private drunkNearGuest(): boolean {
+    const s = this.state;
+    if (!s || this.myTable >= 0) return false;
+    return (s.dk ?? []).some((d) => (d[3] === DR_SIT || d[3] === DR_WALK) && d[5] === (this.body.lv ?? 0) && Math.hypot(d[0] - this.body.x, d[1] - this.body.z) < PUSH_REACH);
+  }
+
+  /** Con la ventanilla abierta: elegir cantidad, ENTER deposita (el anfitrión valida) y E sale. */
+  private windowInput(dt: number) {
+    this.look();
+    this.running = this.stamina.step(false, false, dt);
+    const n = DEPOSIT_STEPS.length;
+    if (this.input.take("sit")) {
+      this.winUi = false;
+      this.input.clear();
+      return;
+    }
+    if (this.input.take("betUp") || this.input.take("betRight")) this.winSel = (this.winSel + 1) % n;
+    if (this.input.take("betDown") || this.input.take("betLeft")) this.winSel = (this.winSel + n - 1) % n;
+    if (this.input.take("ok") || this.input.takeClick()) {
+      const s = this.state;
+      const vn = s?.vn;
+      const room = vn && s ? roomFor(s.ch[this.index] ?? 0, vn[3], s.dp?.[this.index] ?? 0, vn[1], vn[2]) : 0;
+      this.send(0, 100, pickAmount(this.winSel, room));
+    }
+    this.input.take("use");
+    this.input.take("jump");
+    this.input.take("trip");
+  }
+
   /** Cuerpos de los demás (para no atravesarlos). */
   private others(): Body3[] {
     const s = this.state;
@@ -1945,6 +2350,11 @@ export class CasinoGuest implements GuestGame {
       this.input.take("jump");
       this.input.take("trip");
       this.input.takeUse();
+      return;
+    }
+    if (this.winUi && (this.jail > 0 || this.myTable >= 0 || this.stun > 0)) this.winUi = false;
+    if (this.winUi) {
+      this.windowInput(dt);
       return;
     }
     // Corriendo solo se va andando por el salón; en el resto de casos se recupera el aliento.
@@ -2004,7 +2414,11 @@ export class CasinoGuest implements GuestGame {
         const near = nearTable(this.body.x, this.body.z, REACH, lv);
         const dummy = nearMannequin(this.body.x, this.body.z, lv);
         const litter = this.carrying() ? -1 : nearLitter(this.body.x, this.body.z, lv, (k) => (this.state?.lt?.[k] ?? 0) === 1);
-        if (near >= 0) {
+        if (this.drunkNearGuest()) {
+          // «Apartar borracho»: el anfitrión tira el dado y aplica la recarga.
+          if ((this.state?.pc?.[this.index] ?? 0) > 0) this.say(`ESPERA · RECUPERANDO EL ALIENTO ${Math.ceil(this.state?.pc?.[this.index] ?? 0)} s`);
+          else this.send(0, 101);
+        } else if (near >= 0) {
           const [x, z, yaw] = seatSpot(TABLES[near], this.index);
           this.body.x = x;
           this.body.z = z;
@@ -2013,6 +2427,22 @@ export class CasinoGuest implements GuestGame {
           this.selSpot = 0;
           this.selAmount = 1;
           this.send(0);
+        } else if (nearWindow(this.body.x, this.body.z, lv)) {
+          if (this.state?.bs) this.say("LA VENTANILLA ESPERA AL JEFE FINAL");
+          else {
+            this.winUi = true;
+            this.winSel = 0;
+            this.body.x = WINDOW_STAND[0] + Math.max(-1, Math.min(1, this.body.x - WINDOW_STAND[0]));
+            this.body.z = Math.min(this.body.z, WINDOW_STAND[1]);
+            this.body.yaw = Math.PI;
+            this.pitch = 0;
+          }
+        } else if (nearLever(this.body.x, this.body.z, lv)) {
+          this.send(0, 102);
+        } else if (nearLure(this.body.x, this.body.z, lv)) {
+          this.send(0, 103);
+        } else if (nearSeq(this.body.x, this.body.z, lv) >= 0) {
+          this.send(0, 104);
         } else if (litter >= 0) {
           // Coger basura del suelo: el anfitrión comprueba que siga ahí.
           this.send(0, 40 + litter);
@@ -2107,6 +2537,9 @@ export class CasinoGuest implements GuestGame {
       running: this.running,
       hidden: this.hidden,
       tripCd: this.tripCd,
+      win: this.winUi,
+      winSel: this.winSel,
+      pushCd: s?.pc?.[this.index] ?? 0,
     };
     if (!s) {
       const empty: CasinoSnap = {
@@ -2117,7 +2550,7 @@ export class CasinoGuest implements GuestGame {
       };
       ctx.fillStyle = "#05060a";
       ctx.fillRect(0, 0, CW, CH);
-      drawHud(ctx, { s: empty, me: this.index, myTable: -1, near: -1, zone: "", stair: 0, mannequin: -1, litter: false, carrying: false, shop: false, jailSwitch: false, bath: false, selSpot: 0, netLabel: this.netLabel, ready: false, time: this.time, ...hud });
+      drawHud(ctx, { s: empty, me: this.index, myTable: -1, near: -1, zone: "", stair: 0, mannequin: -1, litter: false, carrying: false, shop: false, jailSwitch: false, bath: false, nearWin: false, nearLever: false, nearLure: false, nearSeq: -1, nearDrunk: false, selSpot: 0, netLabel: this.netLabel, ready: false, time: this.time, ...hud });
       return;
     }
     // El muñeco propio se dibuja donde lo tengo yo (respuesta inmediata al andar).
@@ -2150,6 +2583,11 @@ export class CasinoGuest implements GuestGame {
       shop: free && near < 0 && nearShop(this.body.x, this.body.z, lv),
       jailSwitch: free && near < 0 && nearSwitch(this.body.x, this.body.z, lv),
       bath: free && near < 0 && nearBath(this.body.x, this.body.z, lv) >= 0,
+      nearWin: free && nearWindow(this.body.x, this.body.z, lv),
+      nearLever: free && nearLever(this.body.x, this.body.z, lv),
+      nearLure: free && nearLure(this.body.x, this.body.z, lv),
+      nearSeq: free ? nearSeq(this.body.x, this.body.z, lv) : -1,
+      nearDrunk: free && this.drunkNearGuest(),
       selSpot: this.selSpot,
       netLabel: this.netLabel,
       ready: true,

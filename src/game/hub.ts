@@ -15,11 +15,13 @@ import { BlocksGuest, BlocksHost } from "./blocks/game";
 import { BlocksInput } from "./blocks/input";
 import { CasinoGuest, CasinoHost } from "./casino/game";
 import { CasinoInput } from "./casino/input";
+import { DeadZoneGuest, DeadZoneHost } from "./deadzone/game";
+import { Input as DeadZoneInput } from "./deadzone/core/input";
 import type { Keyboard } from "./core/keyboard";
 import { settings } from "./core/settings";
 import type { GuestGame, HostGame } from "./net/types";
 
-export type GameId = "bomber" | "karts" | "balls" | "stick" | "ruleta" | "blocks" | "survival" | "casino";
+export type GameId = "bomber" | "karts" | "balls" | "stick" | "ruleta" | "blocks" | "survival" | "casino" | "deadzone";
 
 export interface GameInfo {
   id: GameId;
@@ -36,6 +38,7 @@ export const GAMES: GameInfo[] = [
   { id: "blocks", name: "Bloques: creativo", desc: "Mundo de bloques para construir juntos · 3D" },
   { id: "survival", name: "Bloques: supervivencia", desc: "Rompe, recoge y craftea herramientas · 3D" },
   { id: "casino", name: "Casino entre amigos", desc: "Ruleta, plinko, tragaperras, moneda y dados · 3D · con peleas y robos" },
+  { id: "deadzone", name: "Dead Zone: Outbreak", desc: "FPS cooperativo de zombis · rondas, armas y barricadas · 3D · 1–4 jugadores" },
 ];
 
 export function isGameId(id: unknown): id is GameId {
@@ -57,6 +60,7 @@ export function createHostGame(id: GameId, keyboard: Keyboard, remoteCount: numb
   if (id === "ruleta") return new RuletaHost(new RuletaInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "blocks" || id === "survival") return new BlocksHost(new BlocksInput(keyboard), remoteCount, "host", id);
   if (id === "casino") return new CasinoHost(new CasinoInput(keyboard), remoteCount, "host");
+  if (id === "deadzone") return new DeadZoneHost(new DeadZoneInput(keyboard), remoteCount, "host");
   return new BombermanHost(bothSchemes(keyboard), remoteCount);
 }
 
@@ -67,5 +71,6 @@ export function createGuestGame(id: GameId, index: number, keyboard: Keyboard): 
   if (id === "ruleta") return new RuletaGuest(index, new RuletaInput(keyboard));
   if (id === "blocks" || id === "survival") return new BlocksGuest(index, new BlocksInput(keyboard), id);
   if (id === "casino") return new CasinoGuest(index, new CasinoInput(keyboard));
+  if (id === "deadzone") return new DeadZoneGuest(index, new DeadZoneInput(keyboard));
   return new BombermanGuest(index, bothSchemes(keyboard));
 }
