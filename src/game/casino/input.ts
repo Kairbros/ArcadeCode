@@ -12,21 +12,31 @@ const HELD = {
   turnRight: ["ArrowRight"],
 };
 const PRESS = {
-  ok: ["Space", "Enter", "NumpadEnter"],
+  // Enter: «listo» en la mesa. Usar lo que llevas en la mano va con el clic izquierdo (o F).
+  ok: ["Enter", "NumpadEnter"],
+  use: ["KeyF"],
+  jump: ["Space"],
+  trip: ["KeyQ"],
   // Con ← → también se elige casilla cuando estás sentado; ahí se cuentan pulsaciones.
   betLeft: ["ArrowLeft", "KeyA"],
   betRight: ["ArrowRight", "KeyD"],
   betUp: ["ArrowUp", "KeyW"],
   betDown: ["ArrowDown", "KeyS"],
   sit: ["KeyE"],
-  // Barra de objetos: monedas, mano (robar) y bate.
+  // Barra de objetos: monedas, mano (robar), bate y el objeto de la tienda.
   slot1: ["Digit1"],
   slot2: ["Digit2"],
   slot3: ["Digit3"],
+  slot4: ["Digit4"],
+  // Emotes: bailar, saludar, festejar y burlarse.
+  emote1: ["Digit5"],
+  emote2: ["Digit6"],
+  emote3: ["Digit7"],
+  emote4: ["Digit8"],
 };
 type Press = keyof typeof PRESS;
 
-const PRESSES: Press[] = ["ok", "betLeft", "betRight", "betUp", "betDown", "sit", "slot1", "slot2", "slot3"];
+const PRESSES: Press[] = ["ok", "use", "jump", "trip", "betLeft", "betRight", "betUp", "betDown", "sit", "slot1", "slot2", "slot3", "slot4", "emote1", "emote2", "emote3", "emote4"];
 
 // --- Ratón: estado compartido, enganchado una sola vez al lienzo del juego ---
 // En el navegador el primer clic captura el puntero; si la vista no lo permite (webview de VS Code) se
@@ -37,7 +47,8 @@ const mouse = {
   clicks: 0,
   attached: false,
   noLock: false,
-  drag: 0,
+  /** Botón izquierdo pulsado (modo arrastrar). */
+  down: false,
   dragged: 0,
   lastX: 0,
   lastY: 0,
@@ -85,17 +96,24 @@ function attachMouse() {
       requestLock();
       return;
     }
-    mouse.drag = ev.button;
+    // Con el puntero capturado el ratón solo mira: cada clic es una acción, sin esperar a soltar.
+    if (pointerLocked()) {
+      mouse.clicks++;
+      return;
+    }
+    // Ojo: antes se guardaba `ev.button` (0 para el izquierdo) como marca de «pulsado» y se comprobaba
+    // con `!drag`: el clic y el arrastre nunca llegaban a contar.
+    mouse.down = true;
     mouse.dragged = 0;
     mouse.lastX = ev.clientX;
     mouse.lastY = ev.clientY;
   });
 
   window.addEventListener("mouseup", (ev) => {
-    if (ev.button !== 0 || mouse.drag === 0) return;
-    // Un clic sin arrastrar es una pulsación (parar el minijuego del robo, por ejemplo).
+    if (ev.button !== 0 || !mouse.down) return;
+    // Un clic sin arrastrar es una pulsación (usar lo que llevas en la mano, por ejemplo).
     if (mouse.dragged <= 4) mouse.clicks++;
-    mouse.drag = 0;
+    mouse.down = false;
   });
 
   document.addEventListener("mousemove", (ev) => {
@@ -105,7 +123,7 @@ function attachMouse() {
       mouse.dy += ev.movementY;
       return;
     }
-    if (!mouse.drag) return;
+    if (!mouse.down) return;
     const dx = Number.isFinite(ev.movementX) ? ev.movementX : ev.clientX - mouse.lastX;
     const dy = Number.isFinite(ev.movementY) ? ev.movementY : ev.clientY - mouse.lastY;
     mouse.lastX = ev.clientX;
@@ -122,11 +140,12 @@ function attachMouse() {
 
 export class CasinoInput {
   private presses: Record<Press, number> = {
-    ok: 0, betLeft: 0, betRight: 0, betUp: 0, betDown: 0, sit: 0, slot1: 0, slot2: 0, slot3: 0,
+    ok: 0, use: 0, jump: 0, trip: 0, betLeft: 0, betRight: 0, betUp: 0, betDown: 0, sit: 0,
+    slot1: 0, slot2: 0, slot3: 0, slot4: 0, emote1: 0, emote2: 0, emote3: 0, emote4: 0,
   };
   private held: Record<Press, boolean> = {
-    ok: false, betLeft: false, betRight: false, betUp: false, betDown: false, sit: false,
-    slot1: false, slot2: false, slot3: false,
+    ok: false, use: false, jump: false, trip: false, betLeft: false, betRight: false, betUp: false, betDown: false, sit: false,
+    slot1: false, slot2: false, slot3: false, slot4: false, emote1: false, emote2: false, emote3: false, emote4: false,
   };
   /** Lectura continua de las teclas de andar. */
   forward = 0;
@@ -163,9 +182,9 @@ export class CasinoInput {
     return true;
   }
 
-  /** Ranura elegida con 1/2/3 este fotograma (0..2) o -1. */
+  /** Ranura elegida con 1/2/3/4 este fotograma (0..3) o -1. */
   takeSlot(): number {
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       if (this.take(`slot${i + 1}` as Press)) return i;
     }
     return -1;
@@ -183,6 +202,19 @@ export class CasinoInput {
     if (mouse.clicks <= 0) return false;
     mouse.clicks--;
     return true;
+  }
+
+  /** Emote elegido con 5–8 este fotograma (1..4) o 0. */
+  takeEmote(): number {
+    for (let i = 1; i <= 4; i++) {
+      if (this.take(`emote${i}` as Press)) return i;
+    }
+    return 0;
+  }
+
+  /** Acción de la mano: clic izquierdo o F. */
+  takeUse(): boolean {
+    return this.takeClick() || this.take("use");
   }
 
   /** Lo que se lleva andado este frame: 1 adelante, -1 atrás, 0 quieto. */

@@ -108,26 +108,26 @@ export const floorTexture = () =>
 
 export const wallTexture = () =>
   make("wall", 256, 256, (g, rnd) => {
-    // Azulejos verdosos de baño viejo, con churretes de humedad.
-    g.fillStyle = "#4a5448";
+    // Paredes de casino oscuro: base ciruela profunda con rayas y molduras doradas.
+    g.fillStyle = "#16091e";
     g.fillRect(0, 0, 256, 256);
-    for (let y = 0; y < 256; y += 32) {
-      for (let x = 0; x < 256; x += 32) {
-        const v = rnd.next() * 14 - 7;
-        g.fillStyle = `rgb(${74 + v},${84 + v},${72 + v})`;
-        g.fillRect(x + 1, y + 1, 30, 30);
-      }
+    for (let x = 0; x < 256; x += 20) {
+      const v = rnd.next() * 10 - 5;
+      g.fillStyle = `rgba(${80 + v},${30 + v},${55 + v},0.28)`;
+      g.fillRect(x, 0, 10, 256);
     }
-    speckle(g, rnd, 256, 256, 4000, 0.12, 1.5);
-    for (let i = 0; i < 14; i++) {
-      const x = rnd.next() * 256, w = 3 + rnd.next() * 10;
-      const grad = g.createLinearGradient(0, 0, 0, 256);
-      grad.addColorStop(0, "rgba(30,25,10,0.5)");
-      grad.addColorStop(1, "rgba(30,25,10,0)");
-      g.fillStyle = grad;
-      g.fillRect(x, 0, w, 120 + rnd.next() * 136);
+    // Molduras horizontales doradas
+    for (const y of [72, 184]) {
+      g.strokeStyle = "rgba(190,148,42,0.22)";
+      g.lineWidth = 3;
+      g.beginPath(); g.moveTo(0, y); g.lineTo(256, y); g.stroke();
+      g.strokeStyle = "rgba(220,180,60,0.10)";
+      g.lineWidth = 1;
+      g.beginPath(); g.moveTo(0, y - 4); g.lineTo(256, y - 4); g.stroke();
+      g.beginPath(); g.moveTo(0, y + 4); g.lineTo(256, y + 4); g.stroke();
     }
-    stains(g, rnd, 256, 256, 10, "rgba(0,0,0,0.35)", 60);
+    speckle(g, rnd, 256, 256, 2500, 0.07, 1.5);
+    stains(g, rnd, 256, 256, 6, "rgba(0,0,0,0.28)", 55);
   }, 3);
 
 /** Etiqueta con una palabra centrada sobre una franja de color. */

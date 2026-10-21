@@ -1,7 +1,7 @@
 // Muñeco del jugador en el casino: anda por el plano de la sala con giro tipo tanque (A/D o ← →), no
 // atraviesa muebles ni paredes y no se mete dentro de otro jugador. Código puro para simularlo en Node.
-import { BODY_R, RUN, TURN, WALK } from "./config";
-import { clampToHall, type Collider } from "./world3d";
+import { BODY_R, GRAVITY, JUMP_V, RUN, STAMINA_MIN, STAMINA_REGEN, STAMINA_TIME, TURN, WALK } from "./config";
+import { clampToHall, collidersAt, onStair, STAIR_COLLIDERS, stairHeight, STAIRS, type Collider, type Level } from "./world3d";
 
 export interface Body3 {
   x: number;
@@ -14,6 +14,82 @@ export interface Body3 {
   kz?: number;
   /** Cabeceo de la vista (rad; + arriba). Solo lo usa el jugador local. */
   pitch?: number;
+  /** Altura del salto sobre el suelo (m) y su velocidad vertical. */
+  y?: number;
+  vy?: number;
+  /** Piso en el que está (0 planta baja, 1 entrepiso). */
+  lv?: Level;
+  /** Escalera por la que va andando (índice en STAIRS) o -1: su altura (y) la da el peldaño que pisa. */
+  st?: number;
+}
+
+/** Colisiones con las que anda este cuerpo: las de su piso o, en una escalera, solo sus paredes. */
+export function bodyColliders(b: Body3): Collider[] {
+  return (b.st ?? -1) >= 0 ? STAIR_COLLIDERS : collidersAt(b.lv ?? 0);
+}
+
+/**
+ * Escaleras andando (se llama después de moverse): si ha entrado en una (por el pie desde abajo o por el
+ * rellano desde el balcón), la altura sale del peldaño que pisa; al salir por arriba pasa al entrepiso y
+ * al salir por abajo, a la planta baja. Mientras va por ella cuenta como planta baja con altura `y`.
+ */
+export function stairStep(b: Body3) {
+  if ((b.st ?? -1) < 0) {
+    const k = STAIRS.findIndex((st) => onStair(st, b.x, b.z));
+    if (k < 0) return;
+    const st = STAIRS[k];
+    const onLanding = b.z >= st.landing[0] && b.z <= st.landing[1];
+    // Desde el balcón solo se entra por el rellano; desde abajo, por el pie (las paredes impiden lo demás).
+    if ((b.lv ?? 0) === 1 && !onLanding) return;
+    b.st = k;
+    b.lv = 0;
+    b.vy = 0;
+  }
+  const st = STAIRS[b.st ?? 0];
+  // Por abajo: otra vez en el suelo del salón.
+  if (b.z > st.zBottom + 0.25) {
+    b.st = -1;
+    b.y = 0;
+    return;
+  }
+  const onLanding = b.z <= st.landing[1];
+  // Por arriba: del rellano al balcón del entrepiso.
+  if (onLanding && st.side * b.x >= st.side * st.exitX) {
+    b.st = -1;
+    b.lv = 1;
+    b.y = 0;
+    return;
+  }
+  // Dentro de la escalera: entre sus barandillas (el rellano se abre hacia el balcón).
+  const r = BODY_R;
+  const outer = st.side < 0 ? st.exitX - 0.5 : st.x0 + r;
+  const inner = st.side < 0 ? st.x1 - r : st.exitX + 0.5;
+  if (onLanding) {
+    b.x = Math.max(outer, Math.min(inner, b.x));
+    b.z = Math.max(st.landing[0] + r, b.z);
+  } else {
+    b.x = Math.max(st.x0 + r, Math.min(st.x1 - r, b.x));
+  }
+  b.y = stairHeight(st, Math.max(b.z, st.zTop));
+}
+
+/** Salta si está en el suelo. Devuelve si ha saltado. */
+export function jump(b: Body3): boolean {
+  if ((b.y ?? 0) > 0) return false;
+  b.vy = JUMP_V;
+  b.y = 0.001;
+  return true;
+}
+
+/** Gravedad del salto: sube, frena y cae al suelo. */
+export function stepJump(b: Body3, dt: number) {
+  if ((b.y ?? 0) <= 0 && (b.vy ?? 0) <= 0) return;
+  b.vy = (b.vy ?? 0) - GRAVITY * dt;
+  b.y = (b.y ?? 0) + b.vy * dt;
+  if (b.y <= 0) {
+    b.y = 0;
+    b.vy = 0;
+  }
 }
 
 export interface Move3 {
@@ -24,6 +100,29 @@ export interface Move3 {
   /** -1 izquierda, 0, 1 derecha: andar de lado (A/D) sin girar. */
   strafe?: number;
   run: boolean;
+}
+
+/**
+ * Estamina para correr (Shift): se gasta corriendo y se recupera sin correr. Si se vacía, el jugador queda
+ * agotado y no vuelve a correr hasta recuperar un poco: así las persecuciones se pueden perder.
+ * La lleva cada equipo para su propio muñeco (los invitados son dueños de su posición).
+ */
+export class Stamina {
+  value = 1;
+  tired = false;
+
+  /** Avanza un fotograma. Devuelve si de verdad corre (quiere, se mueve y le queda aguante). */
+  step(want: boolean, moving: boolean, dt: number): boolean {
+    if (this.tired && this.value >= STAMINA_MIN) this.tired = false;
+    const run = want && moving && !this.tired;
+    if (run) {
+      this.value = Math.max(0, this.value - dt / STAMINA_TIME);
+      if (this.value === 0) this.tired = true;
+    } else {
+      this.value = Math.min(1, this.value + dt / STAMINA_REGEN);
+    }
+    return run;
+  }
 }
 
 /** ¿Choza el cuerpo (círculo) con alguna caja? */

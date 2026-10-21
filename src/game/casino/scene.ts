@@ -3,8 +3,11 @@
 import * as THREE from "three";
 import { PLAYER_COLORS } from "../core/config";
 import { disposeScene, glowSprite, glRenderer, projectTo, renderInto } from "../core/three";
-import { CH, CW, DROP_MAX, EYE_H, HEAD_BOB, PH_BET, PH_PAY, PH_SPIN, SLOT_BAT, SLOT_HAND, SPIN_TIME } from "./config";
-import { croupierSpot, HALL, JAIL, JAIL_LEVER, JAIL_TRASH, tablePoint, TABLES, type TableDef } from "./world3d";
+import { BANANA_MAX, CH, CW, DROP_MAX, EMOTES, EYE_H, ITEM_COST, NPC_OFF, RUN_FOV, VAULT_CD, WALK_FOV, GUARD_FOV, GUARD_SIGHT, HOT_BOOST, NPC_CHASE, NPC_DISTRACTED, HEAD_BOB, PH_BET, PH_PAY, PH_SPIN, SLOT_BAT, SLOT_HAND, SPIN_TIME } from "./config";
+import {
+  ATRIUM, BATH, croupierSpot, HALL, JAIL, JAIL_LEVER, JAIL_SWITCH, JAIL_TRASH, LITTER, MANNEQUINS, onStair, PILLARS, ROUTES, STAIRS, tablePoint,
+  TABLES, UPPER_Y, VAULT, VAULT_PADS, ZONES, type TableDef,
+} from "./world3d";
 import { PLINKO_MULT, RED_NUMBERS, SLOT_SYMBOLS, type CasinoSnap, type TableSnap } from "./table";
 
 /** Todo lo que necesita la escena para dibujar un fotograma. */
@@ -25,6 +28,14 @@ export interface SceneView {
   trashTaken: number;
   /** Cabeceo de la vista (rad; + arriba). Lo mueve el ratón y no viaja por la red. */
   pitch: number;
+  /** Corre ahora mismo (la cámara abre el campo de visión). */
+  running: boolean;
+  /** Altura de mi salto (la cámara sube con él). */
+  jumpY: number;
+  /** Mi piso (la cámara va a su altura). */
+  level: number;
+  /** Llevo basura en la mano (se ve en primera persona y, al soltarla, sale volando). */
+  carry: boolean;
 }
 
 interface Character {
@@ -34,6 +45,13 @@ interface Character {
   head: THREE.Object3D;
   /** Bate que lleva en la mano derecha (los crupiers no). */
   bat: THREE.Object3D | null;
+  /** Móvil del crupier (solo se ve mientras está distraído). */
+  phone: THREE.Object3D | null;
+  /** Basura en la mano derecha (cuando la lleva). */
+  held: THREE.Object3D | null;
+  /** Sombrero (se quita al ponerse la peluca) y piezas de los tres disfraces (bigote, peluca, gafas). */
+  hat: THREE.Object3D | null;
+  looks: THREE.Group[];
   stride: number;
   /** Última posición (para saber cuánto se ha andado). */
   lastX: number;
@@ -65,6 +83,10 @@ interface TableRig {
   pieceGlow: THREE.Sprite | null;
   /** Materiales que lucen al ganar (línea de pago, bocas, aros). */
   lit: THREE.MeshBasicMaterial[];
+  /** Aura de fuego de la mesa caliente (late mientras lo es). */
+  hotGlow: THREE.Sprite;
+  /** Carrera de patos: los cuatro patos (vacío en las demás mesas). */
+  ducks: THREE.Object3D[];
 }
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -93,54 +115,370 @@ class CanvasLabel {
     if (text === this.last) return;
     this.last = text;
     const g = this.ctx;
-    g.clearRect(0, 0, this.w, this.h);
-    g.fillStyle = "rgba(8,9,14,0.92)";
-    g.fillRect(0, 0, this.w, this.h);
-    g.strokeStyle = color;
+    const { w, h } = this;
+    g.clearRect(0, 0, w, h);
+    // Cartel de feria: tablero burdeos redondeado con filo crema y letra gorda con contorno.
+    const r = Math.min(16, h / 3);
+    const board = (inset: number) => {
+      g.beginPath();
+      g.roundRect(inset, inset, w - inset * 2, h - inset * 2, Math.max(2, r - inset));
+    };
+    board(1);
+    g.fillStyle = "#2a0e1c";
+    g.fill();
+    board(4);
+    g.fillStyle = "#5a1a34";
+    g.fill();
     g.lineWidth = 3;
-    g.strokeRect(1.5, 1.5, this.w - 3, this.h - 3);
-    g.fillStyle = color;
-    g.font = "bold 30px monospace";
+    g.strokeStyle = "#ffe2a8";
+    g.stroke();
+    // Bombillas en las esquinas (el toque de marquesina).
+    g.fillStyle = "#fff2c8";
+    for (const [x, y] of [[10, 10], [w - 10, 10], [10, h - 10], [w - 10, h - 10]]) {
+      g.beginPath();
+      g.arc(x, y, 3, 0, Math.PI * 2);
+      g.fill();
+    }
+    const font = (s: number) => `900 ${s}px "Arial Black", "Segoe UI Black", Impact, sans-serif`;
     // Carteles largos («CARA O CRUZ · CRUZ»): se reduce la letra en vez de salirse del cartel.
-    let size = 30;
-    while (size > 13 && g.measureText(text).width > this.w - 18) {
+    let size = Math.round(h * 0.5);
+    g.font = font(size);
+    while (size > 12 && g.measureText(text).width > w - 30) {
       size -= 2;
-      g.font = `bold ${size}px monospace`;
+      g.font = font(size);
     }
     g.textAlign = "center";
     g.textBaseline = "middle";
-    g.fillText(text, this.w / 2, this.h / 2 + 1);
+    g.lineJoin = "round";
+    g.lineWidth = Math.max(4, size * 0.22);
+    g.strokeStyle = "#2a0e1c";
+    g.fillStyle = "#2a0e1c";
+    g.fillText(text, w / 2 + 2, h / 2 + 4);
+    g.strokeText(text, w / 2, h / 2 + 2);
+    g.fillStyle = color;
+    g.fillText(text, w / 2, h / 2 + 2);
     this.texture.needsUpdate = true;
   }
 }
 
-/** Textura de alfombra: cuadros con rombos, como los suelos de casino cutres. */
-function carpetTexture(): THREE.CanvasTexture {
+/** Aleatorio con semilla: los estampados salen igual en todos los equipos. */
+function seeded(seed: number) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+/** Lienzo envuelto en textura que se repite. */
+function tiledTexture(size: number, rx: number, ry: number, draw: (g: CanvasRenderingContext2D, n: number) => void) {
   const c = document.createElement("canvas");
-  c.width = c.height = 64;
-  const g = c.getContext("2d")!;
-  g.fillStyle = "#2a1030";
-  g.fillRect(0, 0, 64, 64);
-  g.fillStyle = "#3a1542";
-  for (let y = 0; y < 64; y += 32) for (let x = 0; x < 64; x += 32) g.fillRect(x, y, 32, 32);
-  g.strokeStyle = "#6a2a6e";
-  g.lineWidth = 2;
-  for (let y = 0; y < 64; y += 32) {
-    for (let x = 0; x < 64; x += 32) {
-      g.beginPath();
-      g.moveTo(x + 16, y + 4);
-      g.lineTo(x + 28, y + 16);
-      g.lineTo(x + 16, y + 28);
-      g.lineTo(x + 4, y + 16);
-      g.closePath();
-      g.stroke();
-    }
-  }
+  c.width = c.height = size;
+  draw(c.getContext("2d")!, size);
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(9, 7);
+  t.repeat.set(rx, ry);
   t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
   return t;
+}
+
+/**
+ * Alfombra de casino de dibujo animado: azul noche con cartas, dados rosas, fichas y confeti tirados por
+ * el suelo. Cada pieza se dibuja también desplazada un lienzo para que el mosaico no deje costuras.
+ */
+function carpetTexture(base = "#141a3c"): THREE.CanvasTexture {
+  return tiledTexture(256, 6, 5, (g, n) => {
+    g.fillStyle = base;
+    g.fillRect(0, 0, n, n);
+    const rnd = seeded(7);
+    const wrap = (x: number, y: number, piece: () => void) => {
+      for (const dx of [-n, 0, n]) {
+        for (const dy of [-n, 0, n]) {
+          g.save();
+          g.translate(x + dx, y + dy);
+          piece();
+          g.restore();
+        }
+      }
+    };
+    // Confeti.
+    const confetti = ["#3fd8e8", "#ff4f9a", "#ffd14a", "#7a6cff"];
+    for (let i = 0; i < 70; i++) {
+      g.fillStyle = confetti[i % confetti.length];
+      const x = rnd() * n, y = rnd() * n, a = rnd() * Math.PI;
+      wrap(x, y, () => {
+        g.rotate(a);
+        g.fillRect(-2, -2, 5, 5);
+      });
+    }
+    // Cartas, dados y fichas, en ese orden para que alguna ficha caiga encima de una carta.
+    const kinds = ["carta", "dado", "ficha", "carta", "ficha", "dado", "carta", "ficha", "dado", "ficha"];
+    kinds.forEach((kind, i) => {
+      const x = ((i % 5) + 0.15 + rnd() * 0.7) * (n / 5);
+      const y = (Math.floor(i / 5) * 0.5 + 0.08 + rnd() * 0.34) * n;
+      const a = rnd() * Math.PI * 2;
+      wrap(x, y, () => {
+        g.rotate(a);
+        if (kind === "carta") {
+          g.fillStyle = "#e9f1ff";
+          g.beginPath();
+          g.roundRect(-14, -19, 28, 38, 4);
+          g.fill();
+          g.strokeStyle = "#141a3c";
+          g.lineWidth = 1.5;
+          g.strokeRect(-10, -15, 20, 30);
+          g.fillStyle = i % 2 ? "#e83e54" : "#141a3c";
+          g.beginPath();
+          g.moveTo(0, -7);
+          g.lineTo(6, 0);
+          g.lineTo(0, 7);
+          g.lineTo(-6, 0);
+          g.fill();
+        } else if (kind === "dado") {
+          g.fillStyle = "#b8124e";
+          g.fillRect(-11, -11, 26, 26);
+          g.fillStyle = "#ff3f86";
+          g.fillRect(-14, -14, 26, 26);
+          g.fillStyle = "#2a0e1c";
+          for (const [px, py] of [[-7, -7], [0, 0], [6, 6]]) {
+            g.beginPath();
+            g.arc(px - 1, py - 1, 2.4, 0, Math.PI * 2);
+            g.fill();
+          }
+        } else {
+          const col = ["#3fd8e8", "#ff4f9a", "#4a6cff"][i % 3];
+          g.fillStyle = col;
+          g.beginPath();
+          g.arc(0, 0, 13, 0, Math.PI * 2);
+          g.fill();
+          g.strokeStyle = "#ffffff";
+          g.lineWidth = 3;
+          g.setLineDash([4, 4]);
+          g.beginPath();
+          g.arc(0, 0, 11, 0, Math.PI * 2);
+          g.stroke();
+          g.setLineDash([]);
+          g.fillStyle = "rgba(255,255,255,0.35)";
+          g.beginPath();
+          g.arc(0, 0, 6, 0, Math.PI * 2);
+          g.fill();
+        }
+      });
+    });
+  });
+}
+
+/**
+ * Estampados de cada zona temática (suelos y paredes), en lienzos de 128 px que se repiten cada
+ * `tile` metros: tablas del bar tropical, rejilla de neón, mármol, parquet, baldosa rosa, terciopelo…
+ */
+function patternTexture(kind: string, w: number, h: number, tile = 4): THREE.CanvasTexture {
+  if (kind === "alfombra" || kind === "alfombra2") {
+    const t = carpetTexture(kind === "alfombra" ? "#141a3c" : "#2a1438");
+    t.repeat.set(w / 5.6, h / 5.6);
+    return t;
+  }
+  if (kind === "zigzag") {
+    const t = wallpaperTexture();
+    t.repeat.set(w / 2.8, h / 2.5);
+    return t;
+  }
+  const rnd = seeded(kind.length * 97);
+  return tiledTexture(128, w / tile, h / tile, (g, n) => {
+    const q = n / 4;
+    if (kind === "tablas") {
+      // Tablas de madera tostada, con juntas y vetas.
+      for (let r = 0; r < 8; r++) {
+        g.fillStyle = ["#8a5232", "#9a6038", "#7a462a", "#a86a3e"][r % 4];
+        g.fillRect(0, r * 16, n, 16);
+        g.fillStyle = "rgba(40,20,10,0.6)";
+        g.fillRect(0, r * 16 + 15, n, 1);
+        g.fillRect(((r * 37) % n), r * 16, 1, 16);
+      }
+    } else if (kind === "neon") {
+      // Suelo negro con rejilla de neón rosa y turquesa.
+      g.fillStyle = "#0c0a18";
+      g.fillRect(0, 0, n, n);
+      g.strokeStyle = "#ff3f9a";
+      g.lineWidth = 2;
+      g.strokeRect(1, 1, n - 2, n - 2);
+      g.strokeStyle = "#3fd8e8";
+      g.beginPath();
+      g.moveTo(n / 2, 0);
+      g.lineTo(n / 2, n);
+      g.moveTo(0, n / 2);
+      g.lineTo(n, n / 2);
+      g.stroke();
+    } else if (kind === "marmol") {
+      // Damero de mármol crema y negro, con vetas.
+      for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) {
+        g.fillStyle = (x + y) % 2 ? "#2a2430" : "#efe6d8";
+        g.fillRect(x * n / 2, y * n / 2, n / 2, n / 2);
+      }
+      g.strokeStyle = "rgba(150,140,160,0.45)";
+      g.lineWidth = 1.5;
+      for (let i = 0; i < 6; i++) {
+        g.beginPath();
+        g.moveTo(rnd() * n, rnd() * n);
+        g.bezierCurveTo(rnd() * n, rnd() * n, rnd() * n, rnd() * n, rnd() * n, rnd() * n);
+        g.stroke();
+      }
+    } else if (kind === "parquet") {
+      // Parquet en espiga claro.
+      g.fillStyle = "#c89a62";
+      g.fillRect(0, 0, n, n);
+      for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) {
+        g.fillStyle = (x + y) % 2 ? "#d8ab70" : "#b8884e";
+        if ((x + y) % 2) g.fillRect(x * q + 2, y * q + 2, q - 4, q / 2 - 3);
+        else g.fillRect(x * q + 2, y * q + 2, q / 2 - 3, q - 4);
+      }
+    } else if (kind === "rosa") {
+      // Baldosa rosa y lila de boutique.
+      for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) {
+        g.fillStyle = (x + y) % 2 ? "#f2a8c8" : "#c8a0e8";
+        g.fillRect(x * q, y * q, q, q);
+      }
+      g.fillStyle = "rgba(255,255,255,0.5)";
+      for (let i = 0; i < 4; i++) g.fillRect(i * q + q / 2 - 1, 0, 2, n);
+    } else if (kind === "terciopelo") {
+      // Terciopelo rojo con rombos dorados.
+      g.fillStyle = "#6a0e22";
+      g.fillRect(0, 0, n, n);
+      g.strokeStyle = "#e0a848";
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(n / 2, 4);
+      g.lineTo(n - 4, n / 2);
+      g.lineTo(n / 2, n - 4);
+      g.lineTo(4, n / 2);
+      g.closePath();
+      g.stroke();
+      g.fillStyle = "#e0a848";
+      g.fillRect(n / 2 - 3, n / 2 - 3, 6, 6);
+    } else if (kind === "bambu") {
+      // Cañas de bambú verticales con sus nudos.
+      for (let i = 0; i < 6; i++) {
+        g.fillStyle = ["#6a8a3a", "#7a9a42", "#5a7a32"][i % 3];
+        g.fillRect(i * (n / 6), 0, n / 6 - 2, n);
+        g.fillStyle = "#3a5020";
+        g.fillRect(i * (n / 6), ((i * 29) % n), n / 6 - 2, 4);
+        g.fillRect(i * (n / 6), ((i * 29 + 64) % n), n / 6 - 2, 4);
+      }
+    } else if (kind === "noche") {
+      // Pared azul noche con líneas de neón.
+      g.fillStyle = "#141432";
+      g.fillRect(0, 0, n, n);
+      g.fillStyle = "#ff3f9a";
+      g.fillRect(0, n * 0.3, n, 3);
+      g.fillStyle = "#3fd8e8";
+      g.fillRect(0, n * 0.7, n, 3);
+    } else {
+      // «galeria»: pared crema con rayas finas.
+      g.fillStyle = "#efe2c8";
+      g.fillRect(0, 0, n, n);
+      g.fillStyle = "#e0cfa8";
+      for (let i = 0; i < 8; i++) g.fillRect(i * (n / 8), 0, 3, n);
+    }
+  });
+}
+
+/** Cuadro abstracto de la galería (formas de colores con semilla, uno distinto por marco). */
+function drawPainting(g: CanvasRenderingContext2D, w: number, h: number, k: number) {
+  const rnd = seeded(31 + k * 7);
+  const palette = ["#ff3f86", "#3fd8e8", "#ffd14a", "#7a6cff", "#2ebd6c", "#ff8a24"];
+  g.fillStyle = ["#f2e6d0", "#1a1432", "#fff4e0", "#2a0e1c", "#e8f0ff"][k % 5];
+  g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 7; i++) {
+    g.fillStyle = palette[(i + k) % palette.length];
+    const x = rnd() * w, y = rnd() * h, r = 8 + rnd() * 26;
+    g.beginPath();
+    if (i % 2) g.arc(x, y, r, 0, Math.PI * 2);
+    else g.rect(x - r, y - r * 0.6, r * 2, r * 1.2);
+    g.fill();
+  }
+}
+
+/** Tema de cada zona: estampado del suelo y de la pared. */
+const THEMES: Record<string, { floor: string; wall: string }> = {
+  "SALÓN REAL": { floor: "alfombra", wall: "zigzag" },
+  "BAR TROPICAL": { floor: "tablas", wall: "bambu" },
+  "ZONA NEÓN": { floor: "neon", wall: "noche" },
+  "SALA DE MÁQUINAS": { floor: "alfombra2", wall: "zigzag" },
+  "VESTÍBULO": { floor: "marmol", wall: "galeria" },
+  "GALERÍA": { floor: "parquet", wall: "galeria" },
+  "BOUTIQUE": { floor: "rosa", wall: "rosa" },
+  "SALA VIP": { floor: "terciopelo", wall: "terciopelo" },
+  "MIRADOR": { floor: "marmol", wall: "zigzag" },
+};
+
+/** Papel pintado en zigzag dorado y ciruela (como los salones de la torre del casino). */
+function wallpaperTexture(): THREE.CanvasTexture {
+  return tiledTexture(128, 12, 3, (g, n) => {
+    g.fillStyle = "#3a1636";
+    g.fillRect(0, 0, n, n);
+    const bands = ["#c88a2e", "#6a2448", "#e0a848", "#4a1a40"];
+    const step = n / 8;
+    for (let b = 0; b < 8; b++) {
+      g.strokeStyle = bands[b % bands.length];
+      g.lineWidth = step * 0.42;
+      g.beginPath();
+      for (let x = 0; x <= n; x += step) {
+        const y = b * step + ((x / step) % 2 === 0 ? 0 : step * 0.5);
+        if (x === 0) g.moveTo(x, y);
+        else g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+  });
+}
+
+/** Cartel de neón dibujado (corona, dólar o palmera): trazo de color con halo, sobre fondo transparente. */
+function drawNeon(g: CanvasRenderingContext2D, w: number, h: number, kind: string, color: string) {
+  g.clearRect(0, 0, w, h);
+  g.lineCap = g.lineJoin = "round";
+  const path = () => {
+    g.beginPath();
+    if (kind === "corona") {
+      g.moveTo(w * 0.15, h * 0.75);
+      g.lineTo(w * 0.1, h * 0.3);
+      g.lineTo(w * 0.32, h * 0.52);
+      g.lineTo(w * 0.5, h * 0.18);
+      g.lineTo(w * 0.68, h * 0.52);
+      g.lineTo(w * 0.9, h * 0.3);
+      g.lineTo(w * 0.85, h * 0.75);
+      g.closePath();
+      g.moveTo(w * 0.2, h * 0.86);
+      g.lineTo(w * 0.8, h * 0.86);
+    } else if (kind === "dolar") {
+      g.moveTo(w * 0.68, h * 0.28);
+      g.bezierCurveTo(w * 0.6, h * 0.16, w * 0.3, h * 0.16, w * 0.32, h * 0.36);
+      g.bezierCurveTo(w * 0.34, h * 0.52, w * 0.68, h * 0.46, w * 0.68, h * 0.64);
+      g.bezierCurveTo(w * 0.68, h * 0.84, w * 0.36, h * 0.84, w * 0.3, h * 0.72);
+      g.moveTo(w * 0.5, h * 0.08);
+      g.lineTo(w * 0.5, h * 0.92);
+    } else {
+      // Palmera: tronco curvo y cinco hojas.
+      g.moveTo(w * 0.5, h * 0.95);
+      g.quadraticCurveTo(w * 0.42, h * 0.6, w * 0.52, h * 0.32);
+      for (const [ex, ey] of [[0.12, 0.42], [0.25, 0.18], [0.55, 0.08], [0.82, 0.2], [0.9, 0.46]]) {
+        g.moveTo(w * 0.52, h * 0.32);
+        g.quadraticCurveTo(w * (0.52 + ex) / 2, h * 0.1, w * ex, h * ey);
+      }
+    }
+  };
+  g.strokeStyle = color;
+  g.shadowColor = color;
+  g.shadowBlur = 18;
+  g.lineWidth = w * 0.06;
+  path();
+  g.stroke();
+  // Núcleo claro del tubo.
+  g.shadowBlur = 0;
+  g.strokeStyle = "rgba(255,255,255,0.85)";
+  g.lineWidth = w * 0.022;
+  path();
+  g.stroke();
 }
 
 // --- Texturas dibujadas -------------------------------------------------------------------
@@ -473,35 +811,53 @@ export class CasinoStage {
   private thrownT = -1;
   private readonly thrownVel = new THREE.Vector3();
   private prevTrash = -1;
+  private prevCarry = false;
+  /**
+   * Cámara de emote: 0 primera persona, 1 tercera persona girando alrededor de tu muñeco (para verte
+   * bailar). Se mezcla poco a poco al entrar y al salir. `orbitA` es el ángulo de la vuelta.
+   */
+  private orbit = 0;
+  private orbitA = 0;
+  /** Basura del casino (latas y bolsas en su sitio de LITTER). */
+  private readonly litter: THREE.Object3D[] = [];
+  /** Jaula: sirena y halo de la caja de la fuga (laten al forzarla). */
+  private jailSiren: THREE.Sprite | null = null;
+  private switchGlow: THREE.Sprite | null = null;
+  /** Bóveda: bisagra de la puerta, volante, los dos paneles del suelo y la luz de alarma. */
+  private vaultHinge: THREE.Group | null = null;
+  private vaultWheel: THREE.Group | null = null;
+  private readonly vaultPads: THREE.MeshBasicMaterial[] = [];
+  private vaultAlarm: THREE.Sprite | null = null;
+  /** Luces «OCUPADO» de las dos cabinas del baño. */
+  private readonly bathLamps: THREE.MeshBasicMaterial[] = [];
+  /** Guardias (uno por ronda, en el orden de los NPC) y el cono de visión de cada uno pintado en el suelo. */
+  private readonly guards: { c: Character; cone: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial> }[] = [];
+  /** Cáscaras de banana del suelo: pool de mallas. */
+  private readonly bananaPool: THREE.Object3D[] = [];
 
   constructor() {
     const sc = this.scene;
-    sc.background = new THREE.Color(0x080910);
-    sc.fog = new THREE.Fog(0x080910, 26, 62);
+    sc.background = new THREE.Color(0x1a0c24);
+    sc.fog = new THREE.Fog(0x2a1238, 40, 110);
     // Luz: una principal desde arriba y un relleno cálido, sin sombras (todo es de cajas).
     const key = new THREE.DirectionalLight(0xfff0d0, 1.9);
-    key.position.set(6, 14, 8);
+    key.position.set(10, 30, 12);
     // Sombras suaves: dan profundidad al salón y a los muñecos (el renderer ya las tiene activadas).
     key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
-    key.shadow.camera.left = -20;
-    key.shadow.camera.right = 20;
-    key.shadow.camera.top = 20;
-    key.shadow.camera.bottom = -20;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.left = -34;
+    key.shadow.camera.right = 34;
+    key.shadow.camera.top = 34;
+    key.shadow.camera.bottom = -34;
     key.shadow.camera.near = 1;
-    key.shadow.camera.far = 45;
+    key.shadow.camera.far = 80;
     key.shadow.bias = -0.0006;
-    const warm = new THREE.PointLight(0xff8040, 40, 34, 2);
-    warm.position.set(0, 6, -10);
-    const cool = new THREE.PointLight(0x40a0ff, 30, 34, 2);
-    cool.position.set(0, 6, 10);
-    sc.add(key, warm, cool, new THREE.HemisphereLight(0x606a90, 0x20102a, 2.0));
-    // Rellenos de las cuatro esquinas, para que no haya zonas negras.
-    for (const [x, z] of [[-13, -11], [13, -11], [-13, 11], [13, 11]] as const) {
-      const l = new THREE.PointLight(0xffb070, 22, 24, 2);
-      l.position.set(x, 5.5, z);
-      sc.add(l);
-    }
+    // Techo violeta y azul que baña la sala; el suelo devuelve un rebote cálido.
+    const warm = new THREE.PointLight(0xff7a3a, 44, 34, 2);
+    warm.position.set(0, 8, -8);
+    const cool = new THREE.PointLight(0x7a5aff, 38, 34, 2);
+    cool.position.set(0, 8, 8);
+    sc.add(key, warm, cool, new THREE.HemisphereLight(0x8a70d8, 0x4a1a2a, 2.3));
     this.buildRoom();
     TABLES.forEach((def) => this.rigs.push(this.buildTable(def)));
     this.buildJail();
@@ -522,10 +878,56 @@ export class CasinoStage {
       this.scene.add(coin);
       this.coinPool.push(coin);
     }
+    // Cáscaras de banana: media rosca amarilla con la punta oscura y un halo para verla en el suelo.
+    for (let i = 0; i < BANANA_MAX; i++) {
+      const peel = new THREE.Group();
+      const arc = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.06, 8, 14, Math.PI * 1.1), this.paint(0xffd84a, { emissive: 0x3a2a04 }));
+      arc.rotation.x = -Math.PI / 2;
+      arc.position.y = 0.06;
+      peel.add(arc);
+      this.put(peel, 0.05, 0.05, 0.08, 0x3a2a12, 0.2, 0.06, 0);
+      peel.add(glowSprite(0xffe070, 0.9, 0.4));
+      peel.visible = false;
+      this.scene.add(peel);
+      this.bananaPool.push(peel);
+    }
+    // Basura del casino: latas y bolsas en el suelo de cada piso, con un halo verde para verlas.
+    LITTER.forEach(([x, z, lv], k) => {
+      const g = new THREE.Group();
+      g.position.set(x, lv * UPPER_Y, z);
+      if (k % 2) {
+        const can = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.24, 10), this.paint([0xc8324a, 0x3a8ac8, 0x6a9a3a][k % 3], { emissive: 0x141414 }));
+        can.rotation.z = Math.PI / 2;
+        can.rotation.y = k;
+        can.position.y = 0.1;
+        g.add(can);
+      } else {
+        const bag = this.sphere(g, 0.2, 0x1a1a22, 0, 0.18, 0);
+        bag.scale.set(1, 0.85, 1);
+        this.put(g, 0.08, 0.1, 0.08, 0x1a1a22, 0, 0.38, 0);
+      }
+      g.add(glowSprite(0xa8d47a, 0.7, 0.35));
+      this.scene.add(g);
+      this.litter.push(g);
+    });
     for (let i = 0; i < 4; i++) {
       const p = this.character(rgb(PLAYER_COLORS[i] ?? PLAYER_COLORS[0]), i === 0);
       p.root.visible = false;
       this.people.push(p);
+    }
+    // Guardias: uniforme azul marino, gorra y porra, con el cono de lo que ven en el suelo (amarillo de
+    // ronda, rojo cuando persiguen): así se sabe dónde no hay que hacer trampas.
+    for (let k = 0; k < ROUTES.length; k++) {
+      const c = this.character(0x2a3a8a, false, false, true);
+      c.root.visible = false;
+      const cone = new THREE.Mesh(
+        new THREE.CircleGeometry(GUARD_SIGHT, 28, Math.PI / 2 - GUARD_FOV, GUARD_FOV * 2),
+        new THREE.MeshBasicMaterial({ color: 0xfff07a, transparent: true, opacity: 0.12, depthWrite: false }),
+      );
+      cone.rotation.x = -Math.PI / 2;
+      cone.position.y = 0.05;
+      c.root.add(cone);
+      this.guards.push({ c, cone });
     }
     // Todo proyecta y recibe sombra (menos los halos y lo que llevas en la mano).
     const inView = (o: THREE.Object3D) => {
@@ -536,12 +938,19 @@ export class CasinoStage {
       }
       return false;
     };
+    // Las piezas pequeñas (botellas, cantos, remaches, focos) no proyectan sombra: no se notaría y con el
+    // mapa grande cada malla con sombra se dibuja dos veces por fotograma.
     sc.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh || inView(o)) return;
-      m.castShadow = true;
       m.receiveShadow = true;
+      if (!m.geometry.boundingSphere) m.geometry.computeBoundingSphere();
+      const scale = Math.max(m.scale.x, m.scale.y, m.scale.z);
+      m.castShadow = (m.geometry.boundingSphere?.radius ?? 1) * scale > 0.3;
     });
+    for (const g of this.guards) g.cone.castShadow = false;
+    // La basura de la jaula no hace sombra (la reja sí: se dibuja en la alfombra).
+    for (const t of this.jailTrash) t.castShadow = false;
   }
 
   dispose() {
@@ -629,72 +1038,107 @@ export class CasinoStage {
     if (this.thrownT <= 0) this.thrownMesh.visible = false;
   }
 
-  /** Celda pequeña encima del salón: el que falla un robo aparece aquí un rato. */
+  /**
+   * Jaula colgada del techo del salón: reja por los seis lados (suelo y techo incluidos) y cadenas.
+   * El preso ve todo el casino a sus pies y desde abajo todos ven quién está encerrado.
+   */
   private buildJail() {
     const { w, d, h } = JAIL;
     const g = new THREE.Group();
     g.position.set(JAIL.x, JAIL.y, JAIL.z);
     this.scene.add(g);
-    // Suelo, techo y tres paredes (la cuarta son barrotes).
-    this.put(g, w, 0.2, d, 0x3a3344, 0, -0.1, 0);
-    this.put(g, w, 0.2, d, 0x201a2c, 0, h, 0);
-    this.put(g, w, h, 0.2, 0x4a4454, 0, h / 2, -d / 2);
-    this.put(g, 0.2, h, d, 0x4a4454, -w / 2, h / 2, 0);
-    this.put(g, 0.2, h, d, 0x4a4454, w / 2, h / 2, 0);
-    // Barrotes por delante y un banco.
-    for (let i = 0; i < 7; i++) this.put(g, 0.09, h, 0.09, 0x9aa0b2, -w / 2 + 0.4 + i * 0.56, h / 2, d / 2);
-    this.put(g, w, 0.1, 0.1, 0x9aa0b2, 0, h - 0.12, d / 2);
-    this.put(g, 1.4, 0.12, 0.45, 0x4a3a2a, -0.6, 0.45, d / 2 - 0.45);
-    // Carteles y una mancha en el suelo: que la celda no sea una caja vacía.
-    const poster = (texto: string, x: number, y: number, z: number, ry: number, w2 = 1.1) => {
-      const l = new CanvasLabel(256, 96);
-      l.set(texto, "#ffd8a0");
-      const m = new THREE.Mesh(
-        new THREE.PlaneGeometry(w2, w2 * 0.375),
-        new THREE.MeshBasicMaterial({ map: l.texture, transparent: true }),
-      );
-      m.position.set(x, y, z);
-      m.rotation.y = ry;
-      g.add(m);
-    };
-    poster("NO ROBES", -w / 2 + 0.13, 1.45, -0.35, Math.PI / 2);
-    poster("PAGA TU CONDENA", w / 2 - 0.13, 1.45, -0.35, -Math.PI / 2, 1.35);
-    const stain = new THREE.Mesh(new THREE.CircleGeometry(0.58, 14), new THREE.MeshLambertMaterial({ color: 0x2a2436 }));
-    stain.rotation.x = -Math.PI / 2;
-    stain.position.set(0.25, 0.02, -0.45);
-    g.add(stain);
-    // Palanca de la pared del fondo: acertarle con la basura acorta la condena.
-    const lever = this.put(g, 0.18, 0.42, 0.1, 0xff5560, JAIL_LEVER[0] - JAIL.x, JAIL_LEVER[1] - JAIL.y, -d / 2 + 0.16, { emissive: 0x401018 });
+    const iron = 0x3a3444;
+    const gold = 0xc8a050;
+    // Suelo y techo de reja (marco de hierro, barrotes dorados cada 0,3 m y travesaños): todo se ve entre
+    // los barrotes, de arriba abajo y de abajo arriba. Su sombra en la alfombra dibuja la reja.
+    const rx = Math.round(w / 0.3);
+    const rz = Math.round(d / 0.6);
+    for (const y of [-0.04, h]) {
+      for (const s of [-1, 1]) {
+        this.put(g, w + 0.2, 0.14, 0.14, iron, 0, y - 0.04, (s * d) / 2);
+        this.put(g, 0.14, 0.14, d, iron, (s * w) / 2, y - 0.04, 0);
+      }
+      for (let i = 1; i < rx; i++) this.put(g, 0.05, 0.05, d, gold, -w / 2 + (i * w) / rx, y, 0, { emissive: 0x1a1004 });
+      for (let i = 1; i < rz; i++) this.put(g, w, 0.04, 0.04, iron, 0, y - 0.04, -d / 2 + (i * d) / rz);
+    }
+    // Cadenas hasta el techo del salón.
+    const chain = HALL.h - (JAIL.y + h);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+      this.put(g, 0.05, chain, 0.05, 0x9a9aa8, (sx * w) / 2.4, h + chain / 2, (sz * d) / 2.4);
+    }
+    // Barrotes en los cuatro lados, con travesaños abajo, a media altura y arriba.
+    const nx = Math.round(w / 0.42);
+    const nz = Math.round(d / 0.42);
+    for (const s of [-1, 1]) {
+      for (let i = 0; i < nx; i++) this.put(g, 0.06, h, 0.06, gold, -w / 2 + ((i + 0.5) * w) / nx, h / 2, (s * d) / 2, { emissive: 0x1a1004 });
+      for (let i = 0; i < nz; i++) this.put(g, 0.06, h, 0.06, gold, (s * w) / 2, h / 2, -d / 2 + ((i + 0.5) * d) / nz, { emissive: 0x1a1004 });
+      for (const y of [0.1, h / 2, h - 0.08]) {
+        this.put(g, w, 0.07, 0.07, gold, 0, y, (s * d) / 2, { emissive: 0x1a1004 });
+        this.put(g, 0.07, 0.07, d, gold, (s * w) / 2, y, 0, { emissive: 0x1a1004 });
+      }
+    }
+    // Banco al fondo.
+    this.put(g, 1.4, 0.12, 0.45, 0x6a4030, -0.6, 0.45, d / 2 - 0.45);
+    for (const s of [-1, 1]) this.put(g, 0.1, 0.42, 0.36, iron, -0.6 + s * 0.55, 0.21, d / 2 - 0.45);
+    // Palanca en un poste del lado del salón: acertarle con la basura acorta la condena.
+    const lx = JAIL_LEVER[0] - JAIL.x;
+    const lz = JAIL_LEVER[2] - JAIL.z;
+    this.put(g, 0.16, JAIL_LEVER[1] - JAIL.y, 0.12, iron, lx, (JAIL_LEVER[1] - JAIL.y) / 2, lz - 0.06);
+    const lever = this.put(g, 0.18, 0.42, 0.1, 0xff5560, lx, JAIL_LEVER[1] - JAIL.y, lz, { emissive: 0x401018 });
     lever.name = "palanca";
     const halo = glowSprite(0xff5560, 1.2, 0.5);
     halo.position.set(lever.position.x, lever.position.y, lever.position.z + 0.1);
     g.add(halo);
-    // Cartel y luces de la celda (que no parezca un agujero negro).
+    // Cartel «CÁRCEL» encima, por las dos caras: hacia el salón y hacia dentro.
     const sign = new CanvasLabel(256, 64);
     sign.set("CÁRCEL", "#ff5560");
-    const plate = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.7, 0.42),
-      new THREE.MeshBasicMaterial({ map: sign.texture, transparent: true }),
-    );
-    plate.position.set(0, 1.62, -d / 2 + 0.12);
-    g.add(plate);
-    const lamp = new THREE.PointLight(0xffd8a0, 60, 13, 2);
+    for (const out of [true, false]) {
+      const plate = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.0, 0.5),
+        new THREE.MeshBasicMaterial({ map: sign.texture, transparent: true }),
+      );
+      plate.position.set(0, h - 0.4, -d / 2 + (out ? -0.06 : 0.06));
+      plate.rotation.y = out ? Math.PI : 0;
+      g.add(plate);
+    }
+    // Sirena roja en el techo de la jaula (gira cuando alguien fuerza la caja de la fuga).
+    const siren = glowSprite(0xff3040, 2.6, 0.25);
+    siren.position.set(0, h + 0.3, 0);
+    g.add(siren);
+    this.jailSiren = siren;
+    // Luces de la jaula.
+    const lamp = new THREE.PointLight(0xffd8a0, 40, 9, 2);
     lamp.position.set(0, h - 0.35, 0);
     g.add(lamp);
-    const fill = new THREE.PointLight(0xbcd0ff, 24, 9, 2);
-    fill.position.set(-w / 2 + 0.5, 0.9, d / 2 - 0.5);
-    g.add(fill);
     // Basura por el suelo (se coge y se tira), con un halo para que se vea a la primera.
     for (const [x, z] of JAIL_TRASH) {
       const t = this.put(this.scene, 0.2, 0.15, 0.2, [0x6a8a4a, 0x8a6a3a, 0x5a6a8a, 0x8a4a4a][this.jailTrash.length % 4], x, JAIL.y + 0.08, z);
       t.rotation.y = this.jailTrash.length * 0.9;
-      t.castShadow = false;
       this.jailTrash.push(t);
       const h2 = glowSprite(0xa8d47a, 0.55, 0.35);
       h2.position.set(x, JAIL.y + 0.12, z);
       this.scene.add(h2);
       this.jailTrashGlow.push(h2);
     }
+    // Caja de la fuga, en la pared del fondo: roja, con palanca y cartel; late cuando alguien la fuerza.
+    const [sx, sy, sz] = JAIL_SWITCH;
+    const box = new THREE.Group();
+    box.position.set(sx, sy, sz);
+    box.rotation.y = Math.PI;
+    this.scene.add(box);
+    this.put(box, 0.62, 0.8, 0.18, 0x8a1a2a, 0, 0, 0);
+    this.put(box, 0.5, 0.66, 0.04, 0x2a0e1c, 0, 0, 0.1);
+    this.put(box, 0.08, 0.36, 0.08, 0xd8d8e0, 0.12, 0.06, 0.16);
+    this.put(box, 0.16, 0.12, 0.12, 0xffce4a, 0.12, 0.26, 0.18, { basic: true });
+    const tag = new CanvasLabel(256, 64);
+    tag.set("FUGA", "#ffce4a");
+    const tagMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.28), new THREE.MeshBasicMaterial({ map: tag.texture, transparent: true }));
+    tagMesh.position.set(0, 0.62, 0.1);
+    box.add(tagMesh);
+    const boxGlow = glowSprite(0xff4050, 1.8, 0.3);
+    boxGlow.position.set(0, 0, 0.3);
+    box.add(boxGlow);
+    this.switchGlow = boxGlow;
   }
 
   /** Lo que se ve en la mano: el bate, la mano abierta o la basura de la celda. */
@@ -713,8 +1157,12 @@ export class CasinoStage {
     const hand = new THREE.Group();
     hand.position.set(0.4, -0.13, -0.64);
     hand.rotation.set(-0.2, -0.35, 0.22);
-    this.put(hand, 0.17, 0.2, 0.11, 0xe8b58c, 0, 0, 0, { basic: true });
-    for (let i = 0; i < 4; i++) this.put(hand, 0.035, 0.16, 0.06, 0xf2c6a0, -0.06 + i * 0.04, 0.17, -0.01, { basic: true });
+    // Guante redondo de dibujo animado: palma, tres dedos gordos y el pulgar.
+    const palm = this.sphere(hand, 0.11, 0xfff2dc, 0, 0, 0, { basic: true }, 0.7);
+    palm.scale.y = 1.1;
+    for (let i = 0; i < 3; i++) this.sphere(hand, 0.045, 0xf4e2c6, -0.06 + i * 0.06, 0.13, -0.01, { basic: true });
+    this.sphere(hand, 0.045, 0xf4e2c6, -0.11, 0.02, -0.02, { basic: true });
+    this.put(hand, 0.14, 0.08, 0.1, 0xc8324a, 0, -0.13, 0, { basic: true });
     this.camera.add(hand);
     this.view.hand = hand;
 
@@ -726,125 +1174,809 @@ export class CasinoStage {
   }
 
   // --- Sala ---------------------------------------------------------------------------------
+  /**
+   * El casino entero: el salón real de doble altura con las mesas, el anillo de zonas temáticas en planta
+   * baja y entrepiso (cada una con su suelo, sus paredes y su decoración), las columnas, el forjado del
+   * entrepiso con su barandilla de cristal, las dos escaleras y el techo con plafones de luz.
+   */
   private buildRoom() {
     const sc = this.scene;
-    // Suelo
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(HALL.w, HALL.d),
-      new THREE.MeshLambertMaterial({ map: carpetTexture() }),
-    );
-    floor.rotation.x = -Math.PI / 2;
-    sc.add(floor);
-    // Zócalo claro en el borde y paredes.
-    const wallColor = 0x1a1424;
-    this.put(sc, HALL.w, 0.35, 0.4, 0x6a2040, 0, 0.17, -HALL.d / 2, { emissive: 0x22000a });
-    this.put(sc, HALL.w, 0.35, 0.4, 0x6a2040, 0, 0.17, HALL.d / 2, { emissive: 0x22000a });
-    this.put(sc, 0.4, 0.35, HALL.d, 0x6a2040, -HALL.w / 2, 0.17, 0, { emissive: 0x22000a });
-    this.put(sc, 0.4, 0.35, HALL.d, 0x6a2040, HALL.w / 2, 0.17, 0, { emissive: 0x22000a });
-    this.put(sc, HALL.w, HALL.h, 0.5, wallColor, 0, HALL.h / 2, -HALL.d / 2);
-    this.put(sc, HALL.w, HALL.h, 0.5, wallColor, 0, HALL.h / 2, HALL.d / 2);
-    this.put(sc, 0.5, HALL.h, HALL.d, wallColor, -HALL.w / 2, HALL.h / 2, 0);
-    this.put(sc, 0.5, HALL.h, HALL.d, wallColor, HALL.w / 2, HALL.h / 2, 0);
-    // Techo oscuro con tiras de neón.
-    this.put(sc, HALL.w, 0.3, HALL.d, 0x0c0a12, 0, HALL.h, 0);
-    for (let i = -1; i <= 1; i++) {
-      this.put(sc, HALL.w - 6, 0.16, 0.3, 0x35e0c8, 0, HALL.h - 0.25, i * 6.5, { basic: true });
+    const HX = HALL.w / 2;
+    const HZ = HALL.d / 2;
+    const AX = ATRIUM.w / 2;
+    const AZ = ATRIUM.d / 2;
+    // Caja exterior oscura (que no se vea el vacío por ninguna junta).
+    for (const [w, d, x, z] of [[HALL.w + 1, 0.5, 0, -HZ - 0.25], [HALL.w + 1, 0.5, 0, HZ + 0.25], [0.5, HALL.d, -HX - 0.25, 0], [0.5, HALL.d, HX + 0.25, 0]] as const) {
+      this.put(sc, w, HALL.h, d, 0x1a0c24, x, HALL.h / 2, z);
     }
-    // Cartel grande del fondo.
-    const sign = new CanvasLabel(512, 128);
-    sign.set("CASINO ENTRE AMIGOS", "#ffce4a");
-    const signMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(14, 3.5),
-      new THREE.MeshBasicMaterial({ map: sign.texture, transparent: true }),
-    );
-    signMesh.position.set(0, 5.4, -HALL.d / 2 + 0.35);
-    sc.add(signMesh);
-    // Barra a la izquierda, con botellas y taburetes.
-    this.put(sc, 2.2, 1.1, 10, 0x3a2418, -15.2, 0.55, 0);
-    this.put(sc, 2.4, 0.16, 10.2, 0x6a4030, -15.2, 1.15, 0);
-    this.put(sc, 0.3, 2.4, 10, 0x2a1620, -16.4, 2.6, 0);
-    const bottleColors = [0x40e080, 0xffc040, 0xe04060, 0x60a0ff, 0xff80c0];
-    for (let i = 0; i < 14; i++) {
-      const h = 0.4 + (i % 3) * 0.12;
-      this.put(sc, 0.16, h, 0.16, bottleColors[i % bottleColors.length], -16.2, 1.3 + h / 2, -4 + i * 0.62, { emissive: 0x101010 });
+    // Suelo y paredes de cada zona, con su tema.
+    for (const zn of ZONES) {
+      const theme = THEMES[zn.name] ?? THEMES["SALÓN REAL"];
+      const w = zn.x1 - zn.x0;
+      const d = zn.z1 - zn.z0;
+      const cx = (zn.x0 + zn.x1) / 2;
+      const cz = (zn.z0 + zn.z1) / 2;
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshLambertMaterial({ map: patternTexture(theme.floor, w, d) }));
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.set(cx, zn.lv * UPPER_Y + 0.006, cz);
+      sc.add(floor);
+      const y0 = zn.lv ? UPPER_Y : 0;
+      const h = (zn.lv ? HALL.h : UPPER_Y) - y0;
+      const wall = (len: number, x: number, z: number, ry: number) => {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(len, h), new THREE.MeshLambertMaterial({ map: patternTexture(theme.wall, len, h, 3) }));
+        m.position.set(x, y0 + h / 2, z);
+        m.rotation.y = ry;
+        sc.add(m);
+        // Zócalo dorado.
+        const base = this.put(sc, len, 0.18, 0.06, 0xe0a848, x, y0 + 0.09, z, { emissive: 0x3a2008 });
+        base.rotation.y = ry;
+      };
+      if (zn.x0 === -HX) wall(d, -HX + 0.01, cz, Math.PI / 2);
+      if (zn.x1 === HX) wall(d, HX - 0.01, cz, -Math.PI / 2);
+      if (zn.z0 === -HZ) wall(w, cx, -HZ + 0.01, 0);
+      if (zn.z1 === HZ) wall(w, cx, HZ - 0.01, Math.PI);
     }
-    for (let i = 0; i < 5; i++) {
-      this.put(sc, 0.5, 0.12, 0.5, 0x503040, -13.9, 0.75, -3.5 + i * 1.7);
-      this.put(sc, 0.12, 0.7, 0.12, 0x301820, -13.9, 0.36, -3.5 + i * 1.7);
+    // Forjado del entrepiso (cuatro losas alrededor del hueco), con un canto dorado y una tira de luz
+    // turquesa hacia el salón real, y focos empotrados en su cara de abajo (el techo de la planta baja).
+    const slabY = UPPER_Y - 0.15;
+    for (const [w, d, x, z] of [
+      [HX - AX, HALL.d, -(HX + AX) / 2, 0], [HX - AX, HALL.d, (HX + AX) / 2, 0],
+      [ATRIUM.w, HZ - AZ, 0, -(HZ + AZ) / 2], [ATRIUM.w, HZ - AZ, 0, (HZ + AZ) / 2],
+    ] as const) {
+      this.put(sc, w, 0.3, d, 0x2a1430, x, slabY, z);
     }
-    // Columnas de las esquinas y plantas.
-    for (const [x, z] of [[-13.5, -12.5], [13.5, -12.5], [-13.5, 12.5], [13.5, 12.5]] as const) {
-      this.put(sc, 1.1, HALL.h, 1.1, 0x241a2e, x, HALL.h / 2, z);
-      this.put(sc, 1.3, 0.12, 1.3, 0xffce4a, x, 3.2, z, { basic: true });
-      this.put(sc, 0.9, 0.9, 0.9, 0x2a4a28, x, 0.85, z);
-      this.put(sc, 0.45, 1.2, 0.45, 0x3a7a34, x, 1.9, z);
+    for (const s of [-1, 1]) {
+      this.put(sc, ATRIUM.w + 0.1, 0.42, 0.1, 0xe0a848, 0, slabY, s * (AZ + 0.02), { emissive: 0x3a2008 });
+      this.put(sc, 0.1, 0.42, ATRIUM.d + 0.1, 0xe0a848, s * (AX + 0.02), slabY, 0, { emissive: 0x3a2008 });
+      this.put(sc, ATRIUM.w, 0.06, 0.12, 0x3fd8e8, 0, slabY - 0.24, s * (AZ + 0.03), { basic: true });
+      this.put(sc, 0.12, 0.06, ATRIUM.d, 0x3fd8e8, s * (AX + 0.03), slabY - 0.24, 0, { basic: true });
     }
-    // Lámparas colgando: cajas brillantes con un halo.
-    for (const [x, z] of [[-8, -1], [8, -1], [0, 4]] as const) {
-      this.put(sc, 0.1, 2.2, 0.1, 0x30202a, x, HALL.h - 1.1, z);
-      this.put(sc, 1.8, 0.24, 1.8, 0xffe6a0, x, HALL.h - 2.3, z, { basic: true });
-      const halo = glowSprite(0xffd890, 4.6, 0.5);
-      halo.position.set(x, HALL.h - 2.35, z);
-      sc.add(halo);
-    }
-    // Apliques de las paredes laterales.
-    for (const z of [-7, 0, 7]) {
-      for (const x of [-HALL.w / 2 + 0.4, HALL.w / 2 - 0.4]) {
-        this.put(sc, 0.2, 0.5, 0.2, 0xffca70, x, 3.4, z, { basic: true });
-        const halo = glowSprite(0xffb060, 2.6, 0.35);
-        halo.position.set(x + (x < 0 ? 0.3 : -0.3), 3.4, z);
-        sc.add(halo);
+    for (let x = -HX + 3; x < HX; x += 6) {
+      for (let z = -HZ + 3; z < HZ; z += 6) {
+        if (Math.abs(x) < AX && Math.abs(z) < AZ) continue;
+        const spot = new THREE.Mesh(new THREE.CircleGeometry(0.22, 12), this.paint(0xfff2d0, { basic: true }));
+        spot.rotation.x = Math.PI / 2;
+        spot.position.set(x, slabY - 0.16, z);
+        sc.add(spot);
       }
     }
-    // Alfombra roja hacia las mesas del fondo.
-    this.put(sc, 9, 0.02, 12, 0x5a1024, 0, 0.012, -1);
+    // Barandilla de cristal alrededor del hueco (con huecos donde llegan las escaleras).
+    const glass = new THREE.MeshLambertMaterial({ color: 0x9ad8ff, transparent: true, opacity: 0.18, depthWrite: false });
+    const rail = (x0: number, z0: number, x1: number, z1: number) => {
+      const len = Math.hypot(x1 - x0, z1 - z0);
+      const g = new THREE.Group();
+      g.position.set((x0 + x1) / 2, UPPER_Y, (z0 + z1) / 2);
+      g.rotation.y = Math.atan2(x1 - x0, z1 - z0) - Math.PI / 2;
+      const pane = new THREE.Mesh(new THREE.BoxGeometry(len, 1.0, 0.04), glass);
+      pane.position.y = 0.55;
+      g.add(pane);
+      this.put(g, len, 0.08, 0.12, 0xe0a848, 0, 1.08, 0, { emissive: 0x3a2008 });
+      for (let k = 0; k <= Math.floor(len / 2); k++) this.put(g, 0.08, 1.1, 0.08, 0xe0a848, -len / 2 + k * (len / Math.max(1, Math.floor(len / 2))), 0.55, 0, { emissive: 0x3a2008 });
+      sc.add(g);
+    };
+    rail(-AX, -AZ, AX, -AZ);
+    rail(-AX, AZ, AX, AZ);
+    for (const s of [-1, 1]) {
+      rail(s * AX, -AZ, s * AX, -3.8);
+      rail(s * AX, -2.2, s * AX, AZ);
+    }
+    // Columnas de mármol de suelo a techo, con anillos dorados.
+    for (const [x, z] of PILLARS) {
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.55, HALL.h, 14), this.paint(0xe8dccc));
+      col.position.set(x, HALL.h / 2, z);
+      sc.add(col);
+      for (const y of [0.15, UPPER_Y - 0.4, HALL.h - 0.4]) this.put(sc, 1.3, 0.3, 1.3, 0xe0a848, x, y, z, { emissive: 0x3a2008 });
+    }
+    this.buildStairs();
+    // Techo con dos plafones sobre el salón real que brillan en violeta y azul.
+    this.put(sc, HALL.w, 0.3, HALL.d, 0x241030, 0, HALL.h, 0);
+    for (const [z, inner, edge] of [[-5.5, 0x5a3ad8, 0xb08aff], [5.5, 0x3a5ae0, 0x8ab0ff]] as const) {
+      this.put(sc, ATRIUM.w - 4, 0.05, 9, inner, 0, HALL.h - 0.16, z, { basic: true });
+      for (const s of [-1, 1]) {
+        this.put(sc, ATRIUM.w - 3.6, 0.18, 0.22, edge, 0, HALL.h - 0.3, z + s * 4.6, { basic: true });
+        this.put(sc, 0.22, 0.18, 9.4, edge, s * (AX - 1.9), HALL.h - 0.3, z, { basic: true });
+      }
+      const wash = new THREE.PointLight(edge, 40, 22, 2);
+      wash.position.set(0, HALL.h - 1.5, z);
+      sc.add(wash);
+    }
+    // Luz de relleno en cada zona (planta baja bajo el forjado y entrepiso).
+    for (const zn of ZONES) {
+      if (zn.name === "SALÓN REAL") continue;
+      const l = new THREE.PointLight(zn.lv ? 0xffd0a0 : 0xffb070, zn.lv ? 34 : 26, 22, 2);
+      l.position.set((zn.x0 + zn.x1) / 2, zn.lv ? HALL.h - 1.5 : UPPER_Y - 0.8, (zn.z0 + zn.z1) / 2);
+      sc.add(l);
+    }
+    // Lámparas de araña colgando sobre las mesas.
+    for (const [x, z] of [[-8, -1.5], [8, -1.5], [0, -4]] as const) {
+      this.put(sc, 0.05, 2.4, 0.05, 0xe0a848, x, HALL.h - 1.2, z);
+      const lamp = new THREE.Mesh(new THREE.ConeGeometry(0.85, 1.2, 10, 1, true), this.paint(0xfff2d0, { basic: true }));
+      lamp.rotation.x = Math.PI;
+      lamp.position.set(x, HALL.h - 2.9, z);
+      sc.add(lamp);
+      this.put(sc, 1.8, 0.1, 1.8, 0xe0a848, x, HALL.h - 2.4, z, { emissive: 0x3a2008 });
+      const halo = glowSprite(0xffe0a0, 5, 0.5);
+      halo.position.set(x, HALL.h - 3.1, z);
+      sc.add(halo);
+    }
+    // Cartel grande colgado sobre el salón, mirando a la entrada.
+    const sign = new CanvasLabel(512, 128);
+    sign.set("CASINO ENTRE AMIGOS", "#ff8a24");
+    const signMesh = new THREE.Mesh(new THREE.PlaneGeometry(12, 3), new THREE.MeshBasicMaterial({ map: sign.texture, transparent: true }));
+    signMesh.position.set(0, 8.6, -AZ + 0.3);
+    sc.add(signMesh);
+    // Pasillo de moqueta roja con ribete dorado: de la puerta del vestíbulo a la carrera de patos.
+    this.put(sc, 4.4, 0.02, HZ - 2.4, 0xe0a848, 0, 0.012, (HZ + 2.4) / 2);
+    this.put(sc, 4.0, 0.024, HZ - 2.4, 0x8a1a34, 0, 0.016, (HZ + 2.4) / 2);
+    this.buildZones();
+    this.buildBath();
+    this.buildVault();
+    this.buildBoutique();
+    this.buildDecor();
+  }
+
+  /** Cartel de zona (tablero burdeos con letras gordas) colgado en (x, y, z) mirando hacia `ry`. */
+  private zoneSign(text: string, color: string, x: number, y: number, z: number, ry: number, w = 4) {
+    const label = new CanvasLabel(512, 128);
+    label.set(text, color);
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, w / 4), new THREE.MeshBasicMaterial({ map: label.texture, transparent: true }));
+    m.position.set(x, y, z);
+    m.rotation.y = ry;
+    this.scene.add(m);
+  }
+
+  /** Neón dibujado (corona, dólar o palmera) con su halo. */
+  private neon(kind: string, color: number, size: number, x: number, y: number, z: number, ry: number) {
+    const css = `#${color.toString(16).padStart(6, "0")}`;
+    const m = new THREE.Mesh(
+      new THREE.PlaneGeometry(size, size),
+      new THREE.MeshBasicMaterial({
+        map: this.texture(`neon-${kind}-${color}`, 256, 256, (g, w, h) => drawNeon(g, w, h, kind, css)),
+        transparent: true,
+        depthWrite: false,
+      }),
+    );
+    m.position.set(x, y, z);
+    m.rotation.y = ry;
+    this.scene.add(m);
+    const halo = glowSprite(color, size * 1.5, 0.28);
+    halo.position.copy(m.position);
+    this.scene.add(halo);
+  }
+
+  /**
+   * Las dos escaleras del salón real: peldaños de moqueta roja con canto dorado, barandillas inclinadas y
+   * el rellano que las une con el balcón del entrepiso.
+   */
+  private buildStairs() {
+    const steps = 20;
+    for (const st of STAIRS) {
+      const bx = (st.x0 + st.x1) / 2;
+      const bz = st.zBottom;
+      const run = st.zBottom - st.zTop;
+      const rise = UPPER_Y / steps;
+      const depth = run / steps;
+      for (let i = 0; i < steps; i++) {
+        const top = (i + 1) * rise;
+        const z = bz - (i + 0.5) * depth;
+        this.put(this.scene, 3, top, depth + 0.01, 0x8a1a34, bx, top / 2, z);
+        this.put(this.scene, 3.02, 0.05, 0.06, 0xe0a848, bx, top, z + depth / 2 - 0.03, { emissive: 0x3a2008 });
+      }
+      // Rellano arriba (une la escalera con el balcón), con barandilla en su fondo y en el lado del hueco.
+      const lz = (st.landing[0] + st.landing[1]) / 2;
+      const ld = st.landing[1] - st.landing[0];
+      this.put(this.scene, st.x1 - st.x0, 0.3, ld, 0x8a1a34, bx, UPPER_Y - 0.15, lz);
+      this.put(this.scene, st.x1 - st.x0, 0.08, 0.08, 0xe0a848, bx, UPPER_Y + 1.05, st.landing[0], { emissive: 0x3a2008 });
+      const innerX = st.side < 0 ? st.x1 : st.x0;
+      this.put(this.scene, 0.08, 0.08, ld, 0xe0a848, innerX, UPPER_Y + 1.05, lz, { emissive: 0x3a2008 });
+      // Barandillas doradas a los dos lados.
+      const len = Math.hypot(run, UPPER_Y);
+      const tilt = Math.atan2(UPPER_Y, run);
+      for (const side of [-1, 1]) {
+        const r = this.put(this.scene, 0.08, 0.08, len, 0xe0a848, bx + side * 1.45, UPPER_Y / 2 + 1.0, bz - run / 2, { emissive: 0x3a2008 });
+        r.rotation.x = tilt;
+      }
+    }
+  }
+
+  /** Decoración de cada zona temática: barra, neones, máquinas, puertas, cuadros, sofás… */
+  private buildZones() {
+    const sc = this.scene;
+    const HX = HALL.w / 2;
+    const HZ = HALL.d / 2;
+    const AX = ATRIUM.w / 2;
+    const U = UPPER_Y;
+    // --- BAR TROPICAL (planta baja, oeste): barra con techo de paja, botellas, taburetes y antorchas.
+    const bx = -HX + 1.6;
+    this.put(sc, 2.2, 1.1, 12, 0x6a2a1e, bx, 0.55, 0);
+    this.put(sc, 2.5, 0.18, 12.3, 0xd89a52, bx, 1.17, 0);
+    this.put(sc, 0.3, 2.6, 12, 0x3a1424, -HX + 0.3, 2.0, 0);
+    for (const y of [1.7, 2.5]) this.put(sc, 0.36, 0.1, 12, 0xe0a848, -HX + 0.4, y, 0, { emissive: 0x3a2008 });
+    const bottleColors = [0x40e080, 0xffc040, 0xe04060, 0x60a0ff, 0xff80c0];
+    for (let i = 0; i < 32; i++) {
+      const h = 0.36 + (i % 3) * 0.1;
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, h, 8), this.paint(bottleColors[i % bottleColors.length], { emissive: 0x181018 }));
+      b.position.set(-HX + 0.45, (i < 16 ? 1.75 : 2.55) + h / 2, -5 + (i % 16) * 0.66);
+      sc.add(b);
+    }
+    for (let i = 0; i < 6; i++) {
+      const z = -5 + i * 2;
+      const seat = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.14, 14), this.paint(0xc8324a));
+      seat.position.set(bx + 1.9, 0.78, z);
+      sc.add(seat);
+      this.put(sc, 0.1, 0.72, 0.1, 0xe0a848, bx + 1.9, 0.36, z, { emissive: 0x2a1804 });
+    }
+    const thatch = this.put(sc, 3.6, 0.25, 13, 0xc89a4a, bx + 0.4, 3.4, 0);
+    thatch.rotation.z = -0.25;
+    // Palmeras fuera de la ronda del guardia (x = −19,5, z = ±17,5): no tienen colisión.
+    for (const [x, z] of [[-HX + 4, -12], [-HX + 4, 12], [-AX - 4, -20.5], [-AX - 4, 20.5]] as const) this.palm(x, z);
+    for (const z of [-8, 8]) {
+      this.put(sc, 0.12, 2.0, 0.12, 0x6a4426, -HX + 4.5, 1.0, z);
+      const fire = glowSprite(0xff8a24, 1.2, 0.8);
+      fire.position.set(-HX + 4.5, 2.15, z);
+      sc.add(fire);
+    }
+    this.zoneSign("BAR TROPICAL", "#ffd23a", -HX + 0.35, 4.2, 0, Math.PI / 2, 4.4);
+    this.zoneSign(`TRUCOS · ${ITEM_COST}`, "#ff8a24", -HX + 0.35, 3.0, -9, Math.PI / 2, 2.8);
+    this.neon("palmera", 0x4aff8a, 2.2, -HX + 0.3, 3.2, 10, Math.PI / 2);
+    // --- ZONA NEÓN (planta baja, este): tubos de neón por las paredes, arcos de luz y los baños.
+    for (const [y, color] of [[1.2, 0xff3f9a], [2.6, 0x3fd8e8], [4.0, 0xff3f9a]] as const) {
+      for (const [z0, z1] of [[-HZ + 1, -3], [3, HZ - 1]] as const) {
+        this.put(sc, 0.06, 0.08, z1 - z0, color, HX - 0.1, y, (z0 + z1) / 2, { basic: true });
+      }
+    }
+    for (const z of [-12, 12]) {
+      const arch = new THREE.Mesh(new THREE.TorusGeometry(1.8, 0.07, 8, 24, Math.PI), this.paint(z < 0 ? 0xff3f9a : 0x3fd8e8, { basic: true }));
+      arch.position.set(AX + 6, 0, z);
+      arch.rotation.y = Math.PI / 2;
+      sc.add(arch);
+      const glow = glowSprite(z < 0 ? 0xff3f9a : 0x3fd8e8, 4, 0.25);
+      glow.position.set(AX + 6, 1.6, z);
+      sc.add(glow);
+    }
+    this.zoneSign("ZONA NEÓN", "#ff3f9a", HX - 0.35, 4.2, -9, -Math.PI / 2, 4);
+    this.neon("corona", 0x3fd8e8, 2.2, HX - 0.3, 3.0, 9, -Math.PI / 2);
+    // --- SALA DE MÁQUINAS (planta baja, norte): filas de tragaperras de adorno con la pantalla encendida.
+    [-9, -4.5, 4.5, 9].forEach((x, k) => {
+      const z = -HZ + 1.4;
+      this.put(sc, 1.4, 2.0, 1.2, [0x8a1a34, 0x2a3a8a, 0x1a6a4a, 0x6a2a8a][k], x, 1.0, z);
+      this.put(sc, 1.0, 0.7, 0.05, [0xffce4a, 0x3fd8e8, 0xff3f9a, 0x7aff8a][k], x, 1.3, z + 0.62, { basic: true });
+      this.put(sc, 1.5, 0.25, 1.3, 0xe0a848, x, 2.1, z, { emissive: 0x3a2008 });
+      const glow = glowSprite(0xffce4a, 1.6, 0.35);
+      glow.position.set(x, 2.4, z);
+      sc.add(glow);
+    });
+    this.zoneSign("SALA DE MÁQUINAS", "#3fd8e8", 0, 4.2, -HZ + 0.35, 0, 5);
+    // --- VESTÍBULO (planta baja, sur): puerta dorada de entrada, bienvenida y macetas.
+    this.put(sc, 5.4, 4.0, 0.2, 0x8a6a2a, 0, 2.0, HZ - 0.15, { emissive: 0x2a1804 });
+    for (const s of [-1, 1]) this.put(sc, 2.4, 3.6, 0.1, 0xe0a848, s * 1.25, 1.8, HZ - 0.3, { emissive: 0x3a2008 });
+    this.zoneSign("BIENVENIDOS", "#ffd23a", 0, 4.4, HZ - 0.35, Math.PI, 4.6);
+    for (const x of [-11, 11]) this.palm(x, HZ - 2);
+    // --- GALERÍA (entrepiso, oeste): cuadros con marco dorado.
+    for (let k = 0; k < 5; k++) {
+      const z = -16 + k * 8;
+      this.put(sc, 0.12, 2.4, 3.2, 0xe0a848, -HX + 0.1, U + 2.8, z, { emissive: 0x3a2008 });
+      const art = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.8, 2.0),
+        new THREE.MeshBasicMaterial({ map: this.texture(`cuadro-${k}`, 128, 96, (g, w, h) => drawPainting(g, w, h, k)) }),
+      );
+      art.position.set(-HX + 0.18, U + 2.8, z);
+      art.rotation.y = Math.PI / 2;
+      sc.add(art);
+    }
+    this.zoneSign("GALERÍA", "#ffd23a", -HX + 0.35, U + 5.0, 0, Math.PI / 2, 4);
+    // --- SALA VIP (entrepiso, norte): sofás de terciopelo, cordones y la bóveda.
+    for (const x of [-8, 8]) {
+      this.put(sc, 3.2, 0.5, 1.2, 0xa8183a, x, U + 0.25, -HZ + 2);
+      this.put(sc, 3.2, 0.9, 0.3, 0xa8183a, x, U + 0.7, -HZ + 1.55);
+    }
+    for (const x of [-4, -2.6, 2.6, 4]) {
+      this.put(sc, 0.12, 1.0, 0.12, 0xe0a848, x, U + 0.5, -HZ + 3.4, { emissive: 0x3a2008 });
+    }
+    for (const s of [-1, 1]) this.put(sc, 1.4, 0.06, 0.06, 0xc8243a, s * 3.3, U + 0.85, -HZ + 3.4);
+    this.zoneSign("SALA VIP", "#ffd23a", -9, U + 4.6, -HZ + 0.35, 0, 4);
+    this.neon("corona", 0xffd23a, 2.4, 9, U + 4.4, -HZ + 0.3, 0);
+    // --- MIRADOR (entrepiso, sur): bancos mirando al salón.
+    for (const x of [-6, 6]) {
+      this.put(sc, 2.6, 0.45, 0.9, 0x6a4030, x, U + 0.22, HZ - 1.4);
+      this.put(sc, 2.6, 0.7, 0.15, 0x6a4030, x, U + 0.6, HZ - 0.95);
+    }
+    this.zoneSign("MIRADOR", "#3fd8e8", 0, U + 4.6, HZ - 0.35, Math.PI, 4);
+    this.neon("dolar", 0x5aff7a, 2.2, -HX + 0.3, U + 4.4, -14, Math.PI / 2);
+  }
+
+  // --- Mobiliario ---------------------------------------------------------------------------
+  /** Silla con respaldo (mirando hacia `ry`). */
+  private chair(x: number, y: number, z: number, ry: number, color = 0xa8183a) {
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    g.rotation.y = ry;
+    this.put(g, 0.5, 0.08, 0.5, color, 0, 0.46, 0);
+    this.put(g, 0.5, 0.55, 0.07, color, 0, 0.75, 0.22);
+    for (const [lx, lz] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]] as const) this.put(g, 0.05, 0.44, 0.05, 0xe0a848, lx, 0.22, lz, { emissive: 0x2a1804 });
+    this.scene.add(g);
+  }
+
+  /** Mesita redonda con dos copas de colores. */
+  private sideTable(x: number, y: number, z: number) {
+    const top = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.06, 18), this.paint(0xe8dccc));
+    top.position.set(x, y + 0.75, z);
+    this.scene.add(top);
+    this.put(this.scene, 0.08, 0.72, 0.08, 0xe0a848, x, y + 0.37, z, { emissive: 0x2a1804 });
+    for (const [dx, color] of [[-0.15, 0xff3f86], [0.17, 0x3fd8e8]] as const) {
+      const glass = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.03, 0.16, 8), this.paint(color, { emissive: 0x2a1020 }));
+      glass.position.set(x + dx, y + 0.86, z + 0.05);
+      this.scene.add(glass);
+    }
+  }
+
+  /** Mesita con cuatro sillas alrededor (un rincón para sentarse a charlar). */
+  private lounge(x: number, y: number, z: number, color?: number) {
+    this.sideTable(x, y, z);
+    for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * Math.PI * 2 + Math.PI / 4;
+      // La silla mira a la mesa: su respaldo queda hacia fuera.
+      this.chair(x + Math.sin(a) * 0.95, y, z + Math.cos(a) * 0.95, a + Math.PI, color);
+    }
+  }
+
+  /** Planta en maceta dorada. */
+  private plant(x: number, y: number, z: number) {
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.28, 0.55, 12), this.paint(0xe0a848, { emissive: 0x2a1804 }));
+    pot.position.set(x, y + 0.28, z);
+    this.scene.add(pot);
+    for (let k = 0; k < 4; k++) this.sphere(this.scene, 0.32 - k * 0.04, k % 2 ? 0x3aa848 : 0x4ac25a, x + Math.sin(k * 2) * 0.12, y + 0.75 + k * 0.28, z + Math.cos(k * 2) * 0.12);
+  }
+
+  /** Lámpara de pie con pantalla y su halo. */
+  private floorLamp(x: number, y: number, z: number) {
+    this.put(this.scene, 0.06, 1.7, 0.06, 0xe0a848, x, y + 0.85, z, { emissive: 0x2a1804 });
+    const shade = new THREE.Mesh(new THREE.ConeGeometry(0.32, 0.4, 12, 1, true), this.paint(0xfff2d0, { basic: true }));
+    shade.position.set(x, y + 1.8, z);
+    this.scene.add(shade);
+    const halo = glowSprite(0xffd8a0, 1.6, 0.4);
+    halo.position.set(x, y + 1.75, z);
+    this.scene.add(halo);
+  }
+
+  /** Papelera verde con tapa. */
+  private bin(x: number, y: number, z: number) {
+    const can = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.24, 0.7, 12), this.paint(0x2a6a3a));
+    can.position.set(x, y + 0.35, z);
+    this.scene.add(can);
+    const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.06, 12), this.paint(0x1a4a2a));
+    lid.position.set(x, y + 0.72, z);
+    this.scene.add(lid);
+  }
+
+  /**
+   * Mobiliario por todo el casino, sobre todo en el entrepiso (que sin él parecía vacío): rincones con
+   * mesitas y sillas, plantas, lámparas de pie, percheros, telescopios mirando al salón y papeleras.
+   * Es decoración: se atraviesa (no tiene colisión) para no estorbar a nadie.
+   */
+  private buildDecor() {
+    const U = UPPER_Y;
+    const HX = HALL.w / 2;
+    const HZ = HALL.d / 2;
+    // --- Galería (oeste, arriba).
+    for (const z of [-19.5, 19.5]) this.lounge(-18.5, U, z, 0x2a3a8a);
+    for (const z of [-21, 21]) this.plant(-HX + 1, U, z);
+    for (const z of [-12, -4, 4, 12]) this.floorLamp(-HX + 0.8, U, z);
+    // Busto sobre una peana.
+    this.put(this.scene, 0.7, 1.1, 0.7, 0xe8dccc, -17.5, U + 0.55, 0);
+    this.sphere(this.scene, 0.32, 0xd8ccbc, -17.5, U + 1.45, 0);
+    // --- Boutique (este, arriba): percheros con camisas, caja registradora y pufs.
+    for (const z of [-12.5, 12.5]) {
+      this.put(this.scene, 0.06, 1.7, 0.06, 0xd8d8e0, HX - 1.2, U + 0.85, z - 1.1);
+      this.put(this.scene, 0.06, 1.7, 0.06, 0xd8d8e0, HX - 1.2, U + 0.85, z + 1.1);
+      this.put(this.scene, 0.06, 0.06, 2.3, 0xd8d8e0, HX - 1.2, U + 1.68, z);
+      for (let k = 0; k < 5; k++) this.put(this.scene, 0.12, 0.9, 0.36, [0xff6ab8, 0x3fd8e8, 0xffd14a, 0xa894ff, 0x7aff8a][k], HX - 1.2, U + 1.2, z - 0.8 + k * 0.4);
+    }
+    this.put(this.scene, 2.4, 1.0, 0.9, 0xc8a0e8, HX - 2.5, U + 0.5, 17);
+    this.put(this.scene, 0.5, 0.35, 0.4, 0x2a2434, HX - 2.5, U + 1.18, 17);
+    for (const z of [-19.5, 19.5]) {
+      const pouf = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.45, 14), this.paint(0xff8ac8));
+      pouf.position.set(19.5, U + 0.22, z);
+      this.scene.add(pouf);
+    }
+    this.plant(HX - 1, U, -21);
+    // --- Sala VIP (norte, arriba): plantas, lámparas y un carrito de bebidas.
+    for (const x of [-13.5, 13.5]) this.plant(x, U, -HZ + 1.4);
+    for (const x of [-5, 5]) this.floorLamp(x, U, -HZ + 0.7);
+    this.put(this.scene, 1.0, 0.8, 0.6, 0xe0a848, 5.5, U + 0.45, -12.5, { emissive: 0x2a1804 });
+    this.sideTable(-5.5, U, -12.6);
+    // --- Mirador (sur, arriba): rincón entre los bancos y telescopios hacia el salón.
+    this.lounge(0, U, 19.5, 0x8a1a34);
+    for (const x of [-13, 13]) {
+      this.put(this.scene, 0.06, 1.2, 0.06, 0x2a2434, x, U + 0.6, 12.4);
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.8, 10), this.paint(0xe0a848, { emissive: 0x3a2008 }));
+      tube.rotation.x = Math.PI / 2 - 0.3;
+      tube.position.set(x, U + 1.3, 12.1);
+      this.scene.add(tube);
+    }
+    for (const x of [-14, 14]) this.plant(x, U, HZ - 1);
+    // --- Papeleras junto a la basura de cada piso.
+    for (const [x, z, lv] of LITTER) {
+      if ((Math.round(x) + Math.round(z)) % 2 === 0) this.bin(x + 0.9, lv * U, z + 0.6);
+    }
+    // --- Planta baja: sofás en el vestíbulo, taburetes en la sala de máquinas y mesas altas en la zona neón.
+    // Lejos de la caja de la fuga (x = 6) para no taparla.
+    for (const x of [-7, 13]) {
+      this.put(this.scene, 2.6, 0.5, 1.0, 0x8a1a34, x, 0.25, HZ - 1.3);
+      this.put(this.scene, 2.6, 0.8, 0.25, 0x8a1a34, x, 0.6, HZ - 0.85);
+    }
+    for (const x of [-9, -4.5, 4.5, 9]) {
+      const stool = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.1, 12), this.paint(0xc8324a));
+      stool.position.set(x, 0.7, -HZ + 3);
+      this.scene.add(stool);
+      this.put(this.scene, 0.08, 0.66, 0.08, 0xe0a848, x, 0.33, -HZ + 3, { emissive: 0x2a1804 });
+    }
+    for (const z of [-8, 8]) {
+      this.sideTable(23, 0, z);
+      this.chair(23.9, 0, z, Math.PI / 2, 0x3fd8e8);
+      this.chair(22.1, 0, z, -Math.PI / 2, 0xff3f9a);
+    }
+    for (const z of [-17.5, 17.5]) this.lounge(-23, 0, z, 0x6a2a1e);
+  }
+
+  /**
+   * Boutique de disfraces (entrepiso, este): un maniquí por disfraz (con el bigote, la peluca o las gafas
+   * puestos), un espejo grande, el mostrador y su cartel. Se compra poniéndose delante del maniquí.
+   */
+  private buildBoutique() {
+    const sc = this.scene;
+    const U = UPPER_Y;
+    const HX = HALL.w / 2;
+    MANNEQUINS.forEach(({ at }, k) => {
+      const g = new THREE.Group();
+      g.position.set(at[0], U, at[1]);
+      g.rotation.y = Math.PI / 2;
+      // Peana, cuerpo de poroto blanco y la cara con el disfraz.
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.5, 0.2, 16), this.paint(0xe0a848, { emissive: 0x3a2008 }));
+      base.position.y = 0.1;
+      g.add(base);
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.36, 0.7, 8, 16), this.paint(0xf2eef2));
+      body.position.y = 0.95;
+      g.add(body);
+      const head = new THREE.Group();
+      head.position.y = 1.45;
+      g.add(head);
+      this.disguiseParts(head, k + 1);
+      const spot = glowSprite(0xffd8f0, 1.8, 0.3);
+      spot.position.set(0, 2.2, 0);
+      g.add(spot);
+      sc.add(g);
+      const price = new CanvasLabel(256, 64);
+      price.set(`${["BIGOTE", "PELUCA", "GAFAS"][k]} · 20`, "#ff8ac8");
+      const tag = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.35), new THREE.MeshBasicMaterial({ map: price.texture, transparent: true }));
+      tag.position.set(at[0] - 0.55, U + 2.5, at[1]);
+      tag.rotation.y = -Math.PI / 2;
+      sc.add(tag);
+    });
+    // Espejo y cartel.
+    this.put(sc, 0.08, 2.6, 2.0, 0xd8e8f4, HX - 0.1, U + 1.8, -9, { emissive: 0x405060 });
+    this.zoneSign("BOUTIQUE · DISFRACES", "#ff8ac8", HX - 0.35, U + 4.6, 0, -Math.PI / 2, 5.2);
+    this.neon("palmera", 0xff4fb0, 2.2, HX - 0.3, U + 4.4, 12, -Math.PI / 2);
+  }
+
+  /**
+   * Piezas de un disfraz sobre un grupo «cabeza» (mismo origen que la de los muñecos): 1 bigote, 2 peluca
+   * rosa, 3 gafas de sol. Devuelve el grupo para poder encenderlo y apagarlo.
+   */
+  private disguiseParts(head: THREE.Object3D, kind: number): THREE.Group {
+    const g = new THREE.Group();
+    if (kind === 1) {
+      // Bigotazo negro de dos puntas.
+      for (const s of [-1, 1]) {
+        const tip = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.2, 4, 8), this.paint(0x141018));
+        tip.rotation.z = (s * Math.PI) / 2.3;
+        tip.position.set(0.12 * s, -0.17, -0.42);
+        g.add(tip);
+      }
+    } else if (kind === 2) {
+      // Peluca rizada rosa.
+      for (let k = 0; k < 9; k++) {
+        const a = (k / 9) * Math.PI * 2;
+        this.sphere(g, 0.17, 0xff6ab8, Math.cos(a) * 0.3, 0.32 + Math.sin(k) * 0.04, Math.sin(a) * 0.3 + 0.05);
+      }
+      this.sphere(g, 0.28, 0xff6ab8, 0, 0.44, 0.05);
+    } else {
+      // Gafas de sol negras con montura dorada.
+      for (const s of [-1, 1]) {
+        const lens = this.put(g, 0.24, 0.16, 0.04, 0x0a0a10, 0.16 * s, 0.06, -0.47);
+        lens.rotation.y = s * 0.15;
+      }
+      this.put(g, 0.6, 0.04, 0.04, 0xe0a848, 0, 0.11, -0.47, { emissive: 0x3a2008 });
+    }
+    head.add(g);
+    return g;
+  }
+
+  /**
+   * Baños contra la pared derecha: dos cabinas de azulejo con la puerta hacia el salón, cartel y una luz
+   * de «ocupado» encima de cada puerta. Dentro te escondes del que te persigue.
+   */
+  private buildBath() {
+    const { x, z, w, d, h } = BATH;
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    this.scene.add(g);
+    const tile = 0xe2ecf2;
+    const trim = 0x3fd8e8;
+    // Laterales, tabique del medio y techo.
+    for (const s of [-1, 1]) this.put(g, w, h, 0.12, tile, 0, h / 2, (s * d) / 2);
+    this.put(g, w, h, 0.08, tile, 0, h / 2, 0);
+    this.put(g, w + 0.1, 0.12, d + 0.1, 0xc8d4dc, 0, h, 0);
+    // Frente (hacia el salón, −X) con dos huecos de puerta de 0,9 m en z = ±1,1.
+    const fx = -w / 2;
+    for (const [pz, pd] of [[-1.875, 0.65], [0, 1.3], [1.875, 0.65]] as const) this.put(g, 0.12, h, pd, tile, fx, h / 2, pz);
+    for (const s of [-1, 1]) {
+      this.put(g, 0.12, h - 2.0, 0.9, tile, fx, 2.0 + (h - 2.0) / 2, s * 1.1);
+      // Puerta (azul la de la izquierda, rosa la de la derecha) con su pomo dorado.
+      this.put(g, 0.06, 1.95, 0.86, s < 0 ? 0x3a7ac8 : 0xe85a8a, fx - 0.05, 0.98, s * 1.1);
+      const knob = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), this.paint(0xffce4a, { emissive: 0x3a2a04 }));
+      knob.position.set(fx - 0.1, 1.0, s * 1.1 + 0.3);
+      g.add(knob);
+      // Luz de «ocupado»: verde libre, roja si hay alguien escondido.
+      const lampMat = new THREE.MeshBasicMaterial({ color: 0x2ebd6c });
+      this.bathLamps.push(lampMat);
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), lampMat);
+      lamp.position.set(fx - 0.1, 2.2, s * 1.1);
+      g.add(lamp);
+    }
+    // Zócalo turquesa y cartel «BAÑOS» mirando al salón.
+    this.put(g, 0.14, 0.12, d, trim, fx - 0.02, 0.06, 0, { emissive: 0x0a3a40 });
+    const sign = new CanvasLabel(256, 64);
+    sign.set("BAÑOS", "#3fd8e8");
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 0.5), new THREE.MeshBasicMaterial({ map: sign.texture, transparent: true }));
+    plate.position.set(fx - 0.08, h + 0.45, 0);
+    plate.rotation.y = -Math.PI / 2;
+    g.add(plate);
+    const glow = glowSprite(0x3fd8e8, 2.6, 0.25);
+    glow.position.set(fx - 0.3, h + 0.45, 0);
+    g.add(glow);
+  }
+
+  /**
+   * Bóveda en la pared del fondo: marco de acero, puerta redonda con volante y remaches, lingotes
+   * detrás, cartel, dos paneles en el suelo (uno por jugador) y una luz de alarma.
+   */
+  private buildVault() {
+    const g = new THREE.Group();
+    g.position.set(VAULT.x, UPPER_Y + VAULT.y, VAULT.z);
+    this.scene.add(g);
+    const steel = 0x8a90a0;
+    this.put(g, 3.0, 2.7, 0.2, 0x4a4a58, 0, 0, 0);
+    // Lingotes dentro (se ven al abrir).
+    for (let i = 0; i < 6; i++) {
+      this.put(g, 0.42, 0.16, 0.22, 0xffce4a, -0.5 + (i % 3) * 0.48, -0.75 + Math.floor(i / 3) * 0.17, 0.14, { emissive: 0x5a3a04 });
+    }
+    // Puerta redonda en una bisagra a la izquierda (se abre hacia el salón).
+    const hinge = new THREE.Group();
+    hinge.position.set(-1.15, 0, 0.14);
+    g.add(hinge);
+    const door = new THREE.Mesh(new THREE.CylinderGeometry(1.12, 1.12, 0.22, 36), this.paint(steel, { emissive: 0x14161c }));
+    door.rotation.x = Math.PI / 2;
+    door.position.set(1.15, 0, 0.11);
+    hinge.add(door);
+    for (let k = 0; k < 10; k++) {
+      const a = (k / 10) * Math.PI * 2;
+      const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 8), this.paint(0x5a5e6a));
+      bolt.rotation.x = Math.PI / 2;
+      bolt.position.set(1.15 + Math.cos(a) * 0.95, Math.sin(a) * 0.95, 0.24);
+      hinge.add(bolt);
+    }
+    const wheel = new THREE.Group();
+    wheel.position.set(1.15, 0, 0.28);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.045, 8, 24), this.paint(0xe0a848, { emissive: 0x3a2008 }));
+    wheel.add(ring);
+    for (let k = 0; k < 3; k++) {
+      const spoke = this.put(wheel, 0.76, 0.05, 0.05, 0xe0a848, 0, 0, 0, { emissive: 0x3a2008 });
+      spoke.rotation.z = (k / 3) * Math.PI;
+    }
+    hinge.add(wheel);
+    this.vaultHinge = hinge;
+    this.vaultWheel = wheel;
+    // Cartel y alarma.
+    const sign = new CanvasLabel(256, 64);
+    sign.set("BÓVEDA", "#ffce4a");
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 0.5), new THREE.MeshBasicMaterial({ map: sign.texture, transparent: true }));
+    plate.position.set(0, 1.7, 0.12);
+    g.add(plate);
+    const alarm = glowSprite(0xff3040, 2.4, 0);
+    alarm.position.set(0, 2.2, 0.3);
+    g.add(alarm);
+    this.vaultAlarm = alarm;
+    // Paneles del suelo: grises vacíos, verdes cuando alguien los pisa.
+    for (const [px, pz] of VAULT_PADS) {
+      const mat = new THREE.MeshBasicMaterial({ color: 0x5a5a68 });
+      this.vaultPads.push(mat);
+      const pad = new THREE.Mesh(new THREE.CircleGeometry(0.7, 24), mat);
+      pad.rotation.x = -Math.PI / 2;
+      pad.position.set(px, UPPER_Y + 0.03, pz);
+      this.scene.add(pad);
+      const rim = new THREE.Mesh(new THREE.RingGeometry(0.7, 0.8, 24), this.paint(0xffce4a, { basic: true }));
+      rim.rotation.x = -Math.PI / 2;
+      rim.position.set(px, UPPER_Y + 0.031, pz);
+      this.scene.add(rim);
+    }
+  }
+
+  /** Bóveda y baño según el estado: volante, puerta, paneles, alarma y luces de «ocupado». */
+  private tickProps(s: CasinoSnap, time: number) {
+    const vt = s.vt;
+    if (vt && this.vaultHinge && this.vaultWheel && this.vaultAlarm) {
+      const [progress, cd, a, b] = vt;
+      this.vaultWheel.rotation.z = progress * Math.PI * 6;
+      this.vaultHinge.rotation.y = lerp(this.vaultHinge.rotation.y, cd > 0 ? -1.9 : 0, 0.06);
+      this.vaultPads.forEach((m, k) => m.color.setHex(cd > 0 ? 0x3a3a44 : (k === 0 ? a : b) >= 0 ? 0x2ebd6c : 0x5a5a68));
+      // Alarma: parpadea los primeros segundos después de abrirla.
+      this.vaultAlarm.material.opacity = cd > VAULT_CD - 10 ? 0.4 + Math.abs(Math.sin(time * 10)) * 0.6 : 0;
+    }
+    const busy = (s.hd ?? []).filter((v) => v > 0).length;
+    this.bathLamps.forEach((m, k) => m.color.setHex(k < busy ? 0xff3040 : 0x2ebd6c));
+  }
+
+  /** Palmera de dibujo animado en maceta (como las del vestíbulo del casino). */
+  private palm(x: number, z: number) {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.38, 0.8, 10), this.paint(0xc8324a));
+    pot.position.y = 0.4;
+    g.add(pot);
+    this.put(g, 1.06, 0.12, 1.06, 0xe0a848, 0, 0.82, 0, { emissive: 0x2a1804 });
+    for (let i = 0; i < 5; i++) {
+      const seg = new THREE.Mesh(new THREE.CylinderGeometry(0.14 - i * 0.012, 0.17 - i * 0.012, 0.6, 7), this.paint(i % 2 ? 0x8a5a32 : 0x6a4426));
+      seg.position.set(Math.sin(i * 0.4) * 0.12, 1.1 + i * 0.58, 0);
+      seg.rotation.z = -0.08;
+      g.add(seg);
+    }
+    for (let k = 0; k < 7; k++) {
+      const leaf = new THREE.Group();
+      leaf.position.set(0.2, 3.9, 0);
+      leaf.rotation.y = (k / 7) * Math.PI * 2;
+      const blade = this.put(leaf, 1.7, 0.06, 0.42, k % 2 ? 0x3aa848 : 0x4ac25a, 0.85, 0, 0);
+      blade.rotation.z = -0.45;
+      g.add(leaf);
+    }
+    this.scene.add(g);
   }
 
   // --- Muñecos -----------------------------------------------------------------------------
-  /** Personaje caricaturesco: piernas, torso, brazos y cabeza grande con ojos. */
-  private character(color: number, me: boolean, croupier = false): Character {
+  /** Esfera colocada (ojos, manos, nariz): achatada en Z si se pide. */
+  private sphere(parent: THREE.Object3D, r: number, color: number, x: number, y: number, z: number,
+    opts?: { emissive?: number; basic?: boolean }, flat = 1): THREE.Mesh {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), this.paint(color, opts));
+    m.position.set(x, y, z);
+    m.scale.z = flat;
+    parent.add(m);
+    return m;
+  }
+
+  /**
+   * Muñeco «poroto» al estilo de Gamble With Your Friends: cuerpo de cápsula del color del jugador, ojos
+   * saltones enormes, guantes redondos, piececitos y sombrero. El crupier es un botones amarillo con
+   * esmoquin, pajarita roja, bigote y fez. La cara mira al -Z (hacia donde anda).
+   */
+  private character(color: number, me: boolean, croupier = false, guard = false): Character {
     const root = new THREE.Group();
-    const skin = 0xe8b58c;
-    const body = color;
+    let hat: THREE.Object3D | null = null;
+    const looks: THREE.Group[] = [];
+    // Con luz propia en el crupier: detrás de la mesa casi no llega la luz.
+    const lit = (e: number) => (croupier ? { emissive: e } : undefined);
+    const body = croupier ? 0xf2cc4a : color;
+    const glove = 0xfff2dc;
+    const dark = 0x2a0e1c;
+    // Piececitos (las «piernas» que se balancean al andar).
     const legs: THREE.Object3D[] = [];
     for (const s of [-1, 1]) {
       const hip = new THREE.Group();
-      hip.position.set(0.15 * s, 0.72, 0);
-      this.put(hip, 0.19, 0.72, 0.2, croupier ? 0x2a2230 : 0x30303e, 0, -0.36, 0);
-      this.put(hip, 0.21, 0.12, 0.28, croupier ? 0x0e0e14 : 0x14141c, 0, -0.68, -0.04); // zapato
+      hip.position.set(0.17 * s, 0.36, 0);
+      const stub = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.3, 10), this.paint(croupier ? 0x1c1a24 : dark, lit(0x141218)));
+      stub.position.y = -0.15;
+      hip.add(stub);
+      const foot = this.sphere(hip, 0.14, croupier ? 0x0e0e14 : dark, 0, -0.31, -0.06, lit(0x0a0a10));
+      foot.scale.set(1, 0.6, 1.5);
       root.add(hip);
       legs.push(hip);
     }
-    // Torso: el crupier va de uniforme oscuro (no del color de la mesa).
-    this.put(root, 0.66, 0.72, 0.36, croupier ? 0x14141c : body, 0, 1.06, 0, croupier ? { emissive: 0x2a2a34 } : undefined);
+    // Cuerpo de cápsula.
+    const bean = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 0.76, 8, 18), this.paint(body, lit(0x4a3a10)));
+    bean.position.y = 1.05;
+    root.add(bean);
     if (croupier) {
-      // Chaleco claro y pajarita (con luz propia: detrás de la mesa casi no llega la luz).
-      this.put(root, 0.5, 0.62, 0.06, 0xf2f2f8, 0, 1.08, -0.2, { emissive: 0x60606a });
-      this.put(root, 0.16, 0.1, 0.06, 0x141018, 0, 1.34, -0.24);
-    } else {
-      // Cuello de la camisa.
-      this.put(root, 0.3, 0.08, 0.3, 0xf2f2f8, 0, 1.42, 0);
+      // Esmoquin: la mitad baja del poroto, con pechera blanca, botones y pajarita roja.
+      const suit = new THREE.Mesh(new THREE.CylinderGeometry(0.445, 0.445, 0.86, 18, 1, true), this.paint(0x1c1a24, lit(0x22202c)));
+      suit.position.y = 0.72;
+      root.add(suit);
+      const skirt = new THREE.Mesh(new THREE.SphereGeometry(0.445, 18, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), this.paint(0x1c1a24, lit(0x22202c)));
+      skirt.position.y = 0.29;
+      root.add(skirt);
+      this.put(root, 0.32, 0.5, 0.05, 0xf8f4ee, 0, 0.92, -0.42, lit(0x6a6660));
+      for (let k = 0; k < 3; k++) this.sphere(root, 0.035, 0x141018, 0, 0.98 - k * 0.15, -0.46);
+      for (const s of [-1, 1]) {
+        const wing = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.16, 8), this.paint(0xd8243a, lit(0x3a0810)));
+        wing.rotation.z = (s * Math.PI) / 2;
+        wing.position.set(0.08 * s, 1.2, -0.45);
+        root.add(wing);
+      }
+      this.sphere(root, 0.045, 0xd8243a, 0, 1.2, -0.46, lit(0x3a0810));
     }
+    // Brazos finos con guante redondo (la mano es lo que se ve de lejos).
     const arms: THREE.Object3D[] = [];
     for (const s of [-1, 1]) {
       const shoulder = new THREE.Group();
-      shoulder.position.set(0.42 * s, 1.34, 0);
-      this.put(shoulder, 0.16, 0.6, 0.18, body, 0, -0.3, 0, croupier ? { emissive: 0x2a2a34 } : undefined);
-      this.put(shoulder, 0.15, 0.14, 0.17, skin, 0, -0.62, 0, croupier ? { emissive: 0x241810 } : undefined);
+      shoulder.position.set(0.44 * s, 1.2, 0);
+      const limb = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.42, 8), this.paint(croupier ? 0x1c1a24 : body, lit(0x22202c)));
+      limb.position.y = -0.21;
+      shoulder.add(limb);
+      this.sphere(shoulder, 0.14, glove, 0, -0.46, 0, lit(0x5a5048));
       root.add(shoulder);
       arms.push(shoulder);
     }
-    // Cabeza grande (caricaturesca) con ojos, nariz, boca y pelo. La cara mira al -Z (hacia donde anda).
-    const head = this.put(root, 0.56, 0.52, 0.5, skin, 0, 1.68, 0, croupier ? { emissive: 0x2a1c12 } : undefined);
-    this.put(root, 0.58, 0.2, 0.54, croupier ? 0x141018 : 0x2a1a12, 0, 1.99, 0.02);
+    // Cara: ojos saltones con pupila, cejas, nariz redonda y sombrero. Gira entera (el crupier mira alrededor).
+    const head = new THREE.Group();
+    head.position.y = 1.55;
+    root.add(head);
     for (const s of [-1, 1]) {
-      this.put(root, 0.1, 0.12, 0.04, 0x141018, 0.13 * s, 1.7, -0.26);
-      this.put(root, 0.04, 0.04, 0.03, 0xffffff, 0.11 * s, 1.74, -0.28);
+      this.sphere(head, 0.16, 0xffffff, 0.16 * s, 0.05, -0.33, lit(0x7a7a7a), 0.7);
+      this.sphere(head, 0.065, 0x141018, 0.15 * s, 0.03, -0.44);
+      // Brillo del ojo.
+      this.sphere(head, 0.02, 0xffffff, 0.13 * s, 0.07, -0.49, { basic: true });
+      const brow = this.put(head, 0.18, 0.045, 0.05, dark, 0.16 * s, 0.25, -0.38);
+      brow.rotation.z = -0.18 * s;
     }
-    this.put(root, 0.11, 0.09, 0.06, 0xd9a07a, 0, 1.63, -0.28); // nariz
-    this.put(root, 0.16, 0.05, 0.04, 0x8a5040, 0, 1.54, -0.26); // boca
-    // Chapa dorada sobre el pecho del jugador propio.
-    if (!croupier && me) this.put(root, 0.2, 0.2, 0.02, 0xffce4a, 0, 1.42, -0.21, { basic: true });
+    this.sphere(head, 0.075, croupier ? 0xff6a5a : 0xff7a8a, 0, -0.12, -0.42, lit(0x3a1410));
+    if (croupier) {
+      // Bigote de manillar y fez con borla.
+      for (const s of [-1, 1]) {
+        const tip = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.16, 4, 8), this.paint(0x2a1a12));
+        tip.rotation.z = (s * Math.PI) / 2.6;
+        tip.position.set(0.1 * s, -0.2, -0.4);
+        head.add(tip);
+      }
+      const fez = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.26, 0.3, 16), this.paint(0xb81a2a, lit(0x3a0810)));
+      fez.position.set(0, 0.48, 0);
+      head.add(fez);
+      this.put(head, 0.03, 0.18, 0.03, 0x141018, 0.12, 0.55, 0.08);
+      this.sphere(head, 0.05, 0x141018, 0.14, 0.45, 0.1);
+    } else if (guard) {
+      // Gorra de policía con visera y escudo dorado, gafas de sol y placa en el pecho.
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.27, 0.18, 16), this.paint(0x141c3a));
+      cap.position.set(0, 0.42, 0.02);
+      head.add(cap);
+      const visor = this.put(head, 0.42, 0.04, 0.2, 0x0a0e1e, 0, 0.34, -0.3);
+      visor.rotation.x = 0.25;
+      this.put(head, 0.1, 0.1, 0.03, 0xffce4a, 0, 0.44, -0.3, { emissive: 0x3a2a04 });
+      this.put(head, 0.56, 0.12, 0.05, 0x0a0a10, 0, 0.05, -0.5);
+      this.put(root, 0.12, 0.14, 0.03, 0xffce4a, 0.17, 1.15, -0.42, { emissive: 0x3a2a04 });
+    } else {
+      // Bombín oscuro con cinta del color del jugador.
+      hat = new THREE.Group();
+      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.28, 0.26, 16), this.paint(dark));
+      crown.position.set(0, 0.5, 0.02);
+      hat.add(crown);
+      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.04, 18), this.paint(dark));
+      brim.position.set(0, 0.38, 0.02);
+      hat.add(brim);
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.285, 0.285, 0.07, 16), this.paint(0xfff2dc));
+      band.position.set(0, 0.42, 0.02);
+      hat.add(band);
+      head.add(hat);
+      // Los tres disfraces de la boutique, apagados hasta que se compra uno.
+      for (let k = 1; k <= 3; k++) {
+        const look = this.disguiseParts(head, k);
+        look.visible = false;
+        looks.push(look);
+      }
+    }
+    // Ficha dorada en el pecho del jugador propio.
+    if (!croupier && me) {
+      const chip = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.03, 16), this.paint(0xffce4a, { basic: true }));
+      chip.rotation.x = Math.PI / 2;
+      chip.position.set(0, 1.02, -0.43);
+      root.add(chip);
+    }
     // Bate en la mano derecha (los jugadores lo llevan siempre; el crupier no).
     let bat: THREE.Object3D | null = null;
     if (!croupier) {
@@ -852,30 +1984,50 @@ export class CasinoStage {
       this.put(stick, 0.07, 0.26, 0.07, 0x2a1a12, 0, -0.02, 0, { emissive: 0x0a0608 });
       this.put(stick, 0.1, 0.5, 0.1, 0xc89a5a, 0, -0.4, 0, { emissive: 0x201408 });
       stick.name = "bate";
-      stick.position.set(0, -0.66, -0.02);
+      stick.position.set(0, -0.48, -0.02);
       stick.rotation.x = -0.35;
       arms[1].add(stick);
       bat = stick;
     }
+    // Móvil del crupier: se lo lleva a la cara cuando se distrae.
+    let phone: THREE.Object3D | null = null;
+    if (croupier) {
+      phone = this.put(arms[1], 0.12, 0.2, 0.03, 0x3fd8e8, 0, -0.5, -0.14, { basic: true });
+      phone.visible = false;
+    }
     this.scene.add(root);
-    void head;
-    return { root, legs, arms, head, bat, stride: 0, lastX: 0, lastZ: 0 };
+    // Lata de basura en el guante derecho (solo los jugadores la cogen).
+    let held: THREE.Object3D | null = null;
+    if (!croupier && !guard) {
+      held = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.22, 10), this.paint(0x6a9a3a, { emissive: 0x1a2a0a }));
+      held.position.set(0, -0.5, -0.15);
+      held.visible = false;
+      arms[1].add(held);
+    }
+    return { root, legs, arms, head, bat, phone, held, hat, looks, stride: 0, lastX: 0, lastZ: 0 };
   }
 
   // --- Mesas -------------------------------------------------------------------------------
   private buildTable(def: TableDef): TableRig {
     const g = new THREE.Group();
-    g.position.set(def.x, 0, def.z);
+    const base = def.lv * UPPER_Y;
+    g.position.set(def.x, base, def.z);
     g.rotation.y = def.yaw;
     this.scene.add(g);
     const neon = rgb(def.color);
-    // Mueble: base oscura, tablero y filo de neón.
-    this.put(g, 3.4, 0.9, 2.1, 0x201828, 0, 0.45, 0);
-    this.put(g, 3.6, 0.14, 2.3, 0x3a2a44, 0, 0.97, 0);
-    this.put(g, 3.66, 0.06, 2.36, neon, 0, 1.04, 0, { basic: true });
-    // Fieltro del color de la mesa (oscurecido).
-    const felt = rgb([def.color[0] * 0.3, def.color[1] * 0.3, def.color[2] * 0.3]);
+    // Mueble de dibujo animado: base burdeos con moldura dorada, tablero de madera y baranda acolchada.
+    this.put(g, 3.3, 0.86, 2.0, 0x5a1a2a, 0, 0.47, 0);
+    this.put(g, 3.36, 0.08, 2.06, 0xe0a848, 0, 0.62, 0, { emissive: 0x3a2008 });
+    this.put(g, 3.4, 0.08, 2.1, 0x2a0e1c, 0, 0.04, 0);
+    // Tira de neón al ras del suelo: el color de la mesa se reconoce desde lejos.
+    this.put(g, 3.42, 0.04, 2.12, neon, 0, 0.1, 0, { basic: true });
+    this.put(g, 3.6, 0.14, 2.3, 0x8a4a28, 0, 0.97, 0);
+    // Fieltro del color de la mesa (vivo, no apagado).
+    const felt = rgb([def.color[0] * 0.55, def.color[1] * 0.55, def.color[2] * 0.55]);
     this.put(g, 3.0, 0.04, 1.7, felt, 0, 1.08, 0);
+    for (const [w, d, x, z] of [[3.6, 0.3, 0, 1.0], [3.6, 0.3, 0, -1.0], [0.3, 1.7, 1.65, 0], [0.3, 1.7, -1.65, 0]] as const) {
+      this.put(g, w, 0.12, d, 0x4a1424, x, 1.1, z);
+    }
     // Cartel encima (detrás de la pieza: si va delante, tapa el juego al sentarse).
     const tall = def.kind === "plinko" || def.kind === "slots";
     const signY = 2.95;
@@ -889,7 +2041,7 @@ export class CasinoStage {
     signMesh.position.set(0, signY, signZ);
     g.add(signMesh);
     // Poste del cartel.
-    this.put(g, 0.1, signY - 1.05, 0.1, 0x30202a, 0, (signY + 1.05) / 2, signZ);
+    this.put(g, 0.1, signY - 1.05, 0.1, 0xe0a848, 0, (signY + 1.05) / 2, signZ, { emissive: 0x2a1804 });
     // Foco de la mesa: la ilumina con su color para que se vea desde lejos.
     const lamp = new THREE.PointLight(neon, 26, 9, 2);
     lamp.position.set(0, 2.5, 0.6);
@@ -904,25 +2056,31 @@ export class CasinoStage {
     const [cx, cz] = croupierSpot(def);
     const c = this.character(0x1a1a24, false, true);
     c.root.scale.setScalar(1.15);
-    c.root.position.set(cx, 0, cz);
+    c.root.position.set(cx, base, cz);
     c.root.rotation.y = def.yaw + Math.PI;
     // Halo del cartel de la mesa (neón).
+    // Aura de la mesa caliente (apagada hasta que le toca).
+    const hotGlow = glowSprite(0xff7a20, 6, 0);
+    hotGlow.position.set(0, 1.4, 0);
+    g.add(hotGlow);
     const signGlow = glowSprite(neon, 3.2, 0.32);
     signGlow.position.set(0, signY, signZ + 0.05);
     g.add(signGlow);
     // Taburetes en los cuatro asientos.
     for (let i = 0; i < 4; i++) {
       const lx = (i - 1.5) * 1.15;
-      this.put(g, 0.46, 0.1, 0.46, 0x3a2030, lx, 0.52, 1.95);
-      this.put(g, 0.1, 0.5, 0.1, 0x241820, lx, 0.26, 1.95);
-      this.put(g, 0.46, 0.42, 0.08, 0x51283c, lx, 0.78, 2.16);
+      const cushion = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.27, 0.14, 14), this.paint(0xc8324a));
+      cushion.position.set(lx, 0.54, 1.95);
+      g.add(cushion);
+      this.put(g, 0.08, 0.5, 0.08, 0xe0a848, lx, 0.26, 1.95, { emissive: 0x2a1804 });
+      this.put(g, 0.46, 0.42, 0.08, 0x8a1a34, lx, 0.78, 2.16);
     }
     // Paño con filo del color de la mesa y pilas de fichas en las esquinas.
     for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
       this.put(g, 1.12, 0.012, 0.012, neon, dx * 1.2, 1.085, dz * 0.5, { basic: true });
       this.put(g, 0.012, 0.012, 0.72, neon, dx * 1.76, 1.085, dz * 0.0, { basic: true });
     }
-    const chipColors = [0xffce4a, 0xe83e54, 0x6adcf5, 0x2ebd6c];
+    const chipColors = [0xffce4a, 0xff4f9a, 0x3fd8e8, 0x4a6cff];
     // En las mesas con máquina (plinko, tragaperras) todas las fichas van detrás: delante taparían el juego.
     for (let s = 0; s < 4; s++) {
       const sx = (s % 2 === 0 ? -1 : 1) * (0.95 + (s > 1 ? 0.28 : 0));
@@ -938,10 +2096,8 @@ export class CasinoStage {
         g.add(chip);
       }
     }
-    // Foco sobre el crupier (si no, se queda en penumbra detrás de la mesa).
-    const spot = new THREE.PointLight(0xffd8a0, 14, 7, 2);
-    spot.position.set(cx, 2.6, cz);
-    this.scene.add(spot);
+    // Sin foco propio para el crupier: con doce mesas serían doce luces más (cada píxel las recorre todas)
+    // y sus materiales ya tienen brillo propio para no quedarse en penumbra detrás de la mesa.
     // --- Piezas del juego ---------------------------------------------------------------
     let spin: THREE.Object3D | null = null;
     let coin: THREE.Object3D | null = null;
@@ -950,6 +2106,7 @@ export class CasinoStage {
     const reelMats: THREE.MeshLambertMaterial[] = [];
     const dice: THREE.Group[] = [];
     const lit: THREE.MeshBasicMaterial[] = [];
+    const ducks: THREE.Object3D[] = [];
     let pieceGlow: THREE.Sprite | null = null;
     /** Halo encima de la pieza del juego (se enciende al girar y al pagar). */
     const halo = (x: number, y: number, z: number, size: number) => {
@@ -988,7 +2145,8 @@ export class CasinoStage {
       board.position.set(0, 2.06, -0.5);
       // Ligeramente inclinado hacia el jugador: desde la silla se ven las bocas y no las tapa la mesa.
       board.rotation.x = 0.16;
-      this.put(board, 2.12, 1.9, 0.1, 0x0d1a24, 0, 0, -0.07);
+      this.put(board, 2.12, 1.9, 0.1, 0x3a1a3a, 0, 0, -0.07);
+      this.put(board, 2.4, 2.18, 0.08, 0x8a4a28, 0, 0, -0.13);
       for (const [w, h, x, y] of [[2.24, 0.08, 0, 0.96], [2.24, 0.08, 0, -0.96], [0.08, 1.98, -1.08, 0], [0.08, 1.98, 1.08, 0]] as const) {
         this.put(board, w, h, 0.16, neon, x, y, -0.02, { basic: true });
       }
@@ -1032,9 +2190,9 @@ export class CasinoStage {
       // Máquina: cuerpo, marquesina, ventanas con rodillos y palanca.
       const cab = new THREE.Group();
       cab.position.set(0, 1.95, -0.35);
-      this.put(cab, 1.5, 2.0, 0.66, 0x2a1a30, 0, 0, 0);
+      this.put(cab, 1.5, 2.0, 0.66, 0x8a1a34, 0, 0, 0);
       this.put(cab, 1.62, 0.24, 0.72, 0xffce4a, 0, 1.04, 0.02, { basic: true });
-      this.put(cab, 1.62, 0.16, 0.72, 0x140e1c, 0, -1.0, 0.02);
+      this.put(cab, 1.62, 0.16, 0.72, 0x2a0e1c, 0, -1.0, 0.02);
       // Ventana negra con el marco de neón y los tres rodillos dentro.
       this.put(cab, 1.36, 0.9, 0.12, 0x080610, 0, 0.05, 0.34);
       for (const [w, h, x, y] of [[1.42, 0.07, 0, 0.5], [1.42, 0.07, 0, -0.4], [0.05, 0.97, -0.71, 0.05], [0.05, 0.97, 0.71, 0.05]] as const) {
@@ -1113,6 +2271,65 @@ export class CasinoStage {
         g.add(plate);
       }
       halo(0, 1.66, -0.02, 2.4);
+    } else if (def.kind === "patos") {
+      // Pista de cuatro carriles de colores, salida blanca, meta a cuadros y un pato por carril.
+      const lanes = [0xe83e54, 0x4a6cff, 0x2ebd6c, 0xa894ff];
+      this.put(g, 2.9, 0.03, 1.4, 0x2a5a3a, 0, 1.105, -0.05);
+      this.put(g, 0.06, 0.035, 1.4, 0xffffff, -1.32, 1.12, -0.05, { basic: true });
+      const finish = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.16, 1.4),
+        new THREE.MeshBasicMaterial({
+          map: this.texture("meta", 32, 128, (gg, w, h) => {
+            for (let yy = 0; yy < 16; yy++) for (let xx = 0; xx < 4; xx++) {
+              gg.fillStyle = (xx + yy) % 2 ? "#111" : "#fff";
+              gg.fillRect((xx * w) / 4, (yy * h) / 16, w / 4, h / 16);
+            }
+          }),
+        }),
+      );
+      finish.rotation.x = -Math.PI / 2;
+      finish.position.set(1.32, 1.124, -0.05);
+      g.add(finish);
+      lanes.forEach((color, k) => {
+        const z = -0.57 + k * 0.345;
+        this.put(g, 2.6, 0.02, 0.06, color, 0, 1.125, z + 0.15, { basic: true });
+        // Número del carril al principio (el mismo que la casilla «PATO N»).
+        const num = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.2, 0.2),
+          new THREE.MeshBasicMaterial({
+            map: this.texture(`pato-${k}`, 64, 64, (gg, w, h) => {
+              gg.fillStyle = `#${color.toString(16).padStart(6, "0")}`;
+              gg.beginPath();
+              gg.arc(w / 2, h / 2, w / 2 - 2, 0, Math.PI * 2);
+              gg.fill();
+              gg.fillStyle = "#fff";
+              gg.font = "900 40px Arial Black, sans-serif";
+              gg.textAlign = "center";
+              gg.textBaseline = "middle";
+              gg.fillText(String(k + 1), w / 2, h / 2 + 2);
+            }),
+            transparent: true,
+          }),
+        );
+        num.rotation.x = -Math.PI / 2;
+        num.position.set(-1.45, 1.13, z);
+        g.add(num);
+        // El pato: cuerpo, cabeza, pico naranja, ojos y un pañuelo del color de su carril.
+        const duck = new THREE.Group();
+        duck.position.set(-1.25, 1.16, z);
+        const body = this.sphere(duck, 0.1, 0xfff4d8, 0, 0.06, 0, { emissive: 0x2a2418 });
+        body.scale.set(1.35, 0.9, 1);
+        this.sphere(duck, 0.07, 0xfff4d8, 0.09, 0.17, 0, { emissive: 0x2a2418 });
+        const beak = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.08, 8), this.paint(0xff8a24, { emissive: 0x3a1a04 }));
+        beak.rotation.z = -Math.PI / 2;
+        beak.position.set(0.17, 0.16, 0);
+        duck.add(beak);
+        for (const s of [-1, 1]) this.sphere(duck, 0.015, 0x141018, 0.13, 0.19, s * 0.04);
+        this.put(duck, 0.05, 0.03, 0.15, color, 0.06, 0.12, 0, { basic: true });
+        g.add(duck);
+        ducks.push(duck);
+      });
+      halo(0, 1.6, -0.05, 2.6);
     } else {
       // Bandeja de dados con borde, y dos dados con sus seis caras.
       this.put(g, 1.9, 0.05, 1.25, 0x14402a, 0, 1.11, -0.08);
@@ -1131,7 +2348,7 @@ export class CasinoStage {
       }
       halo(0, 1.75, -0.1, 2.4);
     }
-    return { def, group: g, spin, coin, ball, reels, reelMats, dice, label, croupier: c, glow: glowMat, signGlow, sign: signMesh, tallSign: tall, pieceGlow, lit };
+    return { def, group: g, spin, coin, ball, reels, reelMats, dice, label, croupier: c, glow: glowMat, signGlow, sign: signMesh, tallSign: tall, pieceGlow, lit, hotGlow, ducks };
   }
 
   // --- Animación ---------------------------------------------------------------------------
@@ -1148,7 +2365,9 @@ export class CasinoStage {
       const seated = pl[3] >= 0;
       const jailed = (s.ja?.[i] ?? 0) > 0;
       // En primera persona tu muñeco no se dibuja (lo ves todo desde sus ojos).
-      p.root.visible = i !== v.me;
+      // Escondido en el baño: no se le ve.
+      // Haciendo un emote, la cámara sale de tu cabeza y tu muñeco sí se ve.
+      p.root.visible = (i !== v.me || this.orbit > 0.35) && !((s.hd?.[i] ?? 0) > 0);
       const moved = Math.hypot(x - p.lastX, z - p.lastZ);
       p.lastX = x;
       p.lastZ = z;
@@ -1161,7 +2380,9 @@ export class CasinoStage {
       const grabbed = fight ? (fight[1] ?? -1) >= 0 : false;
       // Respiración: un balanceo mínimo cuando está quieto.
       const breathe = Math.sin(v.time * 2.1 + i * 1.7) * 0.018;
-      p.root.position.set(x, (jailed ? JAIL.y : 0) + (seated ? -0.42 : 0) + breathe, z);
+      const hop = pl[4] ?? 0;
+      const floorY = jailed ? JAIL.y : (pl[5] ?? 0) * UPPER_Y;
+      p.root.position.set(x, floorY + (seated ? -0.3 : 0) + breathe + hop, z);
       p.root.rotation.y = yaw;
       // Balanceo de piernas y brazos: mientras anda, sube y baja; quieto, respira.
       const walking = !seated && moved > 0.002;
@@ -1187,12 +2408,26 @@ export class CasinoStage {
         p.root.rotation.z = 0;
       }
       if (p.bat) p.bat.visible = !seated;
+      // En el aire, las piernas recogidas; con la zancadilla, la pierna derecha estirada hacia delante.
+      // En el aire, piernas recogidas (en la escalera no: ahí la altura es la del peldaño y anda normal).
+      if (hop > 0.05 && !STAIRS.some((st) => onStair(st, x, z))) p.legs.forEach((leg) => (leg.rotation.x = -0.6));
+      if (p.held) p.held.visible = (s.cy?.[i] ?? -1) >= 0;
+      if (s.tr?.[i]) p.legs[1].rotation.x = -1.35;
+      // Disfraz de la boutique: la peluca quita el bombín.
+      const dg = s.dg?.[i]?.[0] ?? 0;
+      p.looks.forEach((look, k) => (look.visible = dg === k + 1));
+      if (p.hat) p.hat.visible = dg !== 2;
+      // Emote (si no anda): bailar, saludar, festejar o burlarse.
+      const em = s.em?.[i] ?? 0;
+      p.root.rotation.x = 0;
+      p.head.rotation.y = 0;
+      if (em > 0 && !walking && !seated) this.emotePose(p, em, v.time + i);
     }
     // Lo que llevas en la mano (primera persona).
     const inJail = (s.ja?.[v.me] ?? 0) > 0;
     const prog = v.swing > 0 ? clamp01(1 - v.swing / 0.38) : 0;
     if (this.view.bat) {
-      this.view.bat.visible = !inJail && v.slot === SLOT_BAT;
+      this.view.bat.visible = !inJail && v.slot === SLOT_BAT && this.orbit < 0.05;
       // Golpe de arriba abajo: primero se eleva sobre la cabeza y luego cae de frente.
       // Se mantiene casi vertical (poco giro en X) para que no se pierda de vista al bajar.
       const lift = prog < 0.2 ? prog / 0.2 : 1;
@@ -1200,35 +2435,50 @@ export class CasinoStage {
       this.view.bat.position.set(0.4 - down * 0.06, -0.18 + lift * 0.50 - down * 0.62, -0.75 + down * 0.12);
       this.view.bat.rotation.set(-0.18 - lift * 0.25 + down * 0.42, -0.45 + down * 0.2, 0.5 - down * 0.12);
     }
-    if (this.view.hand) this.view.hand.visible = !inJail && v.slot === SLOT_HAND;
-    if (this.view.trash) this.view.trash.visible = inJail && v.trashTaken >= 0;
+    if (this.view.hand) this.view.hand.visible = !inJail && v.slot === SLOT_HAND && this.orbit < 0.05;
+    // En la mano: la basura de la celda o la que has cogido por el casino.
+    if (this.view.trash) this.view.trash.visible = inJail ? v.trashTaken >= 0 : v.carry;
     // La basura que llevas en la mano desaparece del suelo.
     for (let k = 0; k < this.jailTrash.length; k++) this.jailTrash[k].visible = k !== v.trashTaken;
     for (let k = 0; k < this.jailTrashGlow.length; k++) this.jailTrashGlow[k].visible = inJail && k !== v.trashTaken;
     // Al soltarla, vuela hacia donde miras (adorno local: el acierto lo decide el anfitrión).
     if (this.prevTrash >= 0 && v.trashTaken < 0 && inJail) this.throwTrash();
+    if (this.prevCarry && !v.carry && !inJail) this.throwTrash();
     this.prevTrash = v.trashTaken;
+    this.prevCarry = v.carry;
+    this.tickLitter(s);
     this.tickThrown(dt);
     this.tickCoins(s, v.time);
+    this.tickBananas(s, v.time);
+    const hot = s.ht?.[0] ?? -1;
     // Mesas
     for (let i = 0; i < this.rigs.length; i++) {
       const rig = this.rigs[i];
       const t = s.tb[i];
-      if (!t) continue;
+      // La mesa caliente se nota aunque esté vacía: aura de fuego, aro latiendo y «×2» en el cartel.
+      const isHot = hot === i;
+      const pulse = 0.5 + Math.sin(v.time * 5 + i) * 0.5;
+      rig.hotGlow.material.opacity = lerp(rig.hotGlow.material.opacity, isHot ? 0.28 + pulse * 0.2 : 0, Math.min(1, dt * 4));
+      rig.hotGlow.scale.setScalar(isHot ? 5.5 + pulse * 1.2 : 5.5);
+      if (!t) {
+        rig.label.set((isHot ? `×${HOT_BOOST} ` : "") + rig.def.label, `rgb(${rig.def.color[0]},${rig.def.color[1]},${rig.def.color[2]})`);
+        if (rig.glow) rig.glow.opacity = lerp(rig.glow.opacity, isHot ? 0.2 + pulse * 0.25 : 0, Math.min(1, dt * 4));
+        continue;
+      }
       const p = t.ph === PH_SPIN ? clamp01(t.pt / SPIN_TIME) : 1;
       const active = t.pr.some((x) => x === 1);
       // Neón: brilla si estás en ella o cerca.
       if (rig.glow) {
-        const on = v.myTable === i ? 0.55 : v.near === i || active ? 0.22 : 0.0;
+        const on = Math.max(v.myTable === i ? 0.55 : v.near === i || active ? 0.22 : 0.0, isHot ? 0.2 + pulse * 0.25 : 0);
         rig.glow.opacity = lerp(rig.glow.opacity, on, Math.min(1, dt * 4));
       }
       // Cartel: nombre y estado.
       const phase = t.ph === PH_BET ? "" : t.ph === PH_SPIN ? " · GIRANDO" : t.lb ? ` · ${t.lb}` : "";
-      rig.label.set(rig.def.label + phase, `rgb(${rig.def.color[0]},${rig.def.color[1]},${rig.def.color[2]})`);
+      rig.label.set((isHot ? `×${HOT_BOOST} ` : "") + rig.def.label + phase, `rgb(${rig.def.color[0]},${rig.def.color[1]},${rig.def.color[2]})`);
       // Crupier: se balancea y, al girar, levanta los brazos; al pagar da un bote.
       const c = rig.croupier;
       const jump = t.ph === PH_PAY ? Math.max(0, 0.12 - t.pt) * 0.9 : 0;
-      c.root.position.y = Math.sin(v.time * 1.6 + i) * 0.03 + jump;
+      c.root.position.y = rig.def.lv * UPPER_Y + Math.sin(v.time * 1.6 + i) * 0.03 + jump;
       c.arms.forEach((arm, k) => {
         const up = t.ph === PH_SPIN ? -1.5 : t.ph === PH_PAY ? -1.1 : -0.15;
         arm.rotation.x = lerp(arm.rotation.x, up + (k === 0 ? 0 : 0.1), Math.min(1, dt * 5));
@@ -1242,7 +2492,116 @@ export class CasinoStage {
       rig.sign.visible = rig.signGlow.visible = !(rig.tallSign && v.myTable === i);
       this.animateGame(rig, t, p, v.time);
     }
+    this.animateNpcs(s, v.time);
+    this.tickProps(s, v.time);
+    // Fuga en curso: la sirena de la jaula y la caja laten en rojo.
+    const breaking = (s.jb ?? []).some((p) => p > 0);
+    const blink = 0.5 + Math.sin(v.time * 12) * 0.5;
+    if (this.jailSiren) this.jailSiren.material.opacity = breaking ? 0.3 + blink * 0.6 : 0.2;
+    if (this.switchGlow) {
+      this.switchGlow.material.opacity = breaking ? 0.4 + blink * 0.5 : 0.3;
+      this.switchGlow.scale.setScalar(breaking ? 1.8 + blink : 1.8);
+    }
     this.followCamera(v, dt);
+  }
+
+  /**
+   * Crupieres y guardia según el anfitrión: posición, giro y pose (andando, persiguiendo con los brazos
+   * por delante o mirando el móvil). Va después de las mesas para mandar sobre su pose de crupier.
+   */
+  private animateNpcs(s: CasinoSnap, time: number) {
+    const list = s.np;
+    if (!list) return;
+    list.forEach((n, k) => {
+      const guard = k >= this.rigs.length ? this.guards[k - this.rigs.length] : null;
+      const c = guard ? guard.c : this.rigs[k]?.croupier;
+      if (!c) return;
+      const [x, z, yaw, state] = n;
+      // Guardia fuera de servicio: no se dibuja (entra cuando sube el turno).
+      if (guard) c.root.visible = state !== NPC_OFF;
+      if (state === NPC_OFF) return;
+      const base = (n[6] ?? 0) * UPPER_Y;
+      const moved = Math.hypot(x - c.lastX, z - c.lastZ);
+      c.lastX = x;
+      c.lastZ = z;
+      if (moved < 1.5) c.stride += moved;
+      c.root.position.x = x;
+      c.root.position.z = z;
+      c.root.rotation.y = yaw;
+      const walking = moved > 0.002;
+      const swing = walking ? Math.sin(c.stride * 3.2) * 0.7 : 0;
+      c.legs.forEach((leg, i) => (leg.rotation.x = swing * (i === 0 ? 1 : -1)));
+      const chasing = state === NPC_CHASE;
+      const distracted = state === NPC_DISTRACTED;
+      if (c.phone) c.phone.visible = distracted;
+      c.head.rotation.x = distracted ? 0.35 : 0;
+      if (chasing) {
+        // Brazos por delante y saltitos: va a por ti.
+        c.arms.forEach((arm, i) => {
+          arm.rotation.x = -1.45 + Math.sin(time * 14 + i * Math.PI) * 0.2;
+          arm.rotation.z = 0;
+        });
+        c.root.position.y = base + Math.abs(Math.sin(c.stride * 3.2)) * 0.1;
+        c.head.rotation.y = 0;
+      } else if (distracted) {
+        // Mirando el móvil, de espaldas a la mesa.
+        c.arms[1].rotation.x = -2.15;
+        c.arms[1].rotation.z = 0.45;
+        c.arms[0].rotation.x = -0.2;
+        c.head.rotation.y = Math.sin(time * 0.8 + k) * 0.08;
+      } else if (walking) {
+        c.arms.forEach((arm, i) => {
+          arm.rotation.x = swing * (i === 0 ? -0.7 : 0.7);
+          arm.rotation.z = 0;
+        });
+        if (guard) c.root.position.y = base;
+      } else if (guard) {
+        // Guardia parado: brazos quietos y respiración.
+        c.arms.forEach((arm) => (arm.rotation.x = lerp(arm.rotation.x, 0, 0.2)));
+        c.root.position.y = base + Math.sin(time * 2) * 0.015;
+      }
+      // Zancadilla: tumbado en el suelo hasta que se levanta.
+      c.root.rotation.z = n[5] ? 1.4 : 0;
+      if (n[5]) c.root.position.y = base + 0.3;
+      if (guard) {
+        guard.cone.material.color.setHex(chasing ? 0xff4050 : 0xfff07a);
+        guard.cone.material.opacity = chasing ? 0.18 : 0.12;
+      }
+    });
+  }
+
+  /** Pose de cada emote (sobre la pose de quieto): bailar, saludar, festejar y burlarse. */
+  private emotePose(p: Character, em: number, t: number) {
+    const name = EMOTES[em - 1];
+    if (name === "BAILAR") {
+      p.root.rotation.y += Math.sin(t * 6) * 0.5;
+      p.root.position.y += Math.abs(Math.sin(t * 6)) * 0.12;
+      p.arms.forEach((arm, k) => {
+        arm.rotation.x = -2.4 + Math.sin(t * 6 + k * Math.PI) * 0.6;
+        arm.rotation.z = (k === 0 ? -1 : 1) * 0.3;
+      });
+      p.legs.forEach((leg, k) => (leg.rotation.x = Math.sin(t * 6 + k * Math.PI) * 0.4));
+    } else if (name === "SALUDAR") {
+      p.arms[1].rotation.x = -2.8;
+      p.arms[1].rotation.z = 0.4 + Math.sin(t * 10) * 0.45;
+    } else if (name === "FESTEJAR") {
+      p.root.position.y += Math.abs(Math.sin(t * 7)) * 0.3;
+      p.arms.forEach((arm, k) => {
+        arm.rotation.x = -2.9;
+        arm.rotation.z = (k === 0 ? -1 : 1) * 0.35;
+      });
+    } else {
+      // Burlarse: se echa hacia atrás con las manos en la cintura y la cabeza que no para.
+      p.root.rotation.x = -0.18;
+      p.arms.forEach((arm, k) => {
+        arm.rotation.x = -0.3;
+        arm.rotation.z = (k === 0 ? 1 : -1) * 0.9;
+      });
+      p.head.rotation.y = Math.sin(t * 12) * 0.35;
+      return;
+    }
+    p.root.rotation.x = 0;
+    p.head.rotation.y = 0;
   }
 
   /** Animación propia de cada juego según la fase y el resultado. */
@@ -1308,6 +2667,21 @@ export class CasinoStage {
       rig.coin.rotation.y = target - Math.PI * 2 * turns * (1 - k);
       // Lanzamiento: sube y vuelve a caer en la peana.
       rig.spin.position.y = 1.63 + (spinning ? Math.sin(clamp01(p) * Math.PI) * 0.34 : 0);
+    } else if (rig.def.kind === "patos") {
+      const w = t.rs[0] ?? 0;
+      const prog = spinning ? p : paying ? 1 : 0;
+      rig.ducks.forEach((duck, k) => {
+        const seed = t.rs[k + 1] ?? k * 17;
+        // Cada pato acaba en su sitio (el ganador en la meta) pero con acelerones y frenazos por el
+        // camino: hay adelantamientos y el ganador no se sabe hasta el final.
+        const final = k === w ? 1 : 0.6 + (seed % 30) / 100;
+        const surge = Math.sin(prog * Math.PI * (2 + (seed % 3)) + seed) * 0.08 * Math.sin(prog * Math.PI);
+        duck.position.x = -1.25 + 2.5 * clamp01(prog * final + surge);
+        duck.position.y = 1.16 + (spinning ? Math.abs(Math.sin(time * 14 + k * 1.3)) * 0.05 : 0);
+        duck.rotation.z = spinning ? Math.sin(time * 14 + k) * 0.15 : 0;
+        // El ganador da saltitos en la meta al pagar.
+        if (paying && k === w) duck.position.y += Math.abs(Math.sin(time * 8)) * 0.08;
+      });
     } else if (rig.def.kind === "dados") {
       rig.dice.forEach((grp, i) => {
         const v = Math.max(1, Math.min(6, Math.round(t.rs[i] ?? (i === 0 ? 5 : 2))));
@@ -1326,6 +2700,24 @@ export class CasinoStage {
     }
   }
 
+  /** Basura en el suelo: se ve si está en su sitio (no la lleva nadie ni se está reponiendo). */
+  private tickLitter(s: CasinoSnap) {
+    this.litter.forEach((g, k) => (g.visible = (s.lt?.[k] ?? 0) === 0));
+  }
+
+  /** Cáscaras de banana del suelo (posiciones del anfitrión). */
+  private tickBananas(s: CasinoSnap, time: number) {
+    const list = s.bn ?? [];
+    for (let k = 0; k < this.bananaPool.length; k++) {
+      const m = this.bananaPool[k];
+      const b = list[k];
+      m.visible = !!b;
+      if (!b) continue;
+      m.position.set(b[0], (b[2] ?? 0) * UPPER_Y, b[1]);
+      m.rotation.y = k * 1.7 + Math.sin(time * 2 + k) * 0.1;
+    }
+  }
+
   /** Monedas del suelo: giran, flotan un poco y parpadean cuando están a punto de desaparecer. */
   private tickCoins(s: CasinoSnap, time: number) {
     const list = s.co ?? [];
@@ -1337,7 +2729,7 @@ export class CasinoStage {
         continue;
       }
       m.visible = true;
-      m.position.set(c[0], 0.18 + Math.abs(Math.sin(time * 3 + k)) * 0.06, c[1]);
+      m.position.set(c[0], (c[3] ?? 0) * UPPER_Y + 0.18 + Math.abs(Math.sin(time * 3 + k)) * 0.06, c[1]);
       m.rotation.y = time * 3.5 + k;
       const left = c[2] ?? 0;
       m.scale.setScalar(left < 2.5 ? 0.7 + Math.abs(Math.sin(time * 9)) * 0.3 : 1);
@@ -1353,7 +2745,8 @@ export class CasinoStage {
     const t = table >= 0 ? v.s.tb[table] : null;
     const spinP = t && t.ph === PH_SPIN ? clamp01(t.pt / SPIN_TIME) : 0;
     // Primera persona: al sentarse se cierra el campo (tele sobre el mecanismo).
-    const fovTarget = seat ? lerp(56, 46, spinP) : 68;
+    // De pie, al correr la cámara se abre: se nota la velocidad.
+    const fovTarget = seat ? lerp(56, 46, spinP) : v.running ? RUN_FOV : WALK_FOV;
     if (Math.abs(this.camera.fov - fovTarget) > 0.03) {
       this.camera.fov = lerp(this.camera.fov, fovTarget, Math.min(1, dt * 5));
       this.camera.updateProjectionMatrix();
@@ -1365,9 +2758,9 @@ export class CasinoStage {
       const [fxw, fzw] = tablePoint(seat, fx, fz);
       ex = x - Math.sin(yaw) * lean;
       ez = z - Math.cos(yaw) * lean;
-      ey = eyeY;
+      ey = eyeY + seat.lv * UPPER_Y;
       ax = fxw;
-      ay = fy;
+      ay = fy + seat.lv * UPPER_Y;
       az = fzw;
     } else {
       // De pie: los ojos del muñeco, con vaivén al andar y la mirada del ratón (guiñada + cabeceo).
@@ -1376,10 +2769,26 @@ export class CasinoStage {
       const cp = Math.cos(v.pitch);
       ex = x;
       ez = z;
-      ey = (jailed ? JAIL.y : 0) + EYE_H + bob;
+      ey = (jailed ? JAIL.y : v.level * UPPER_Y) + EYE_H + bob + v.jumpY;
       ax = x - Math.sin(yaw) * cp * 3;
       ay = ey + Math.sin(v.pitch) * 3;
       az = z - Math.cos(yaw) * cp * 3;
+      // Emote: la cámara se pone delante de ti y da una vuelta lenta alrededor mientras dura.
+      const emoting = (v.s.em?.[v.me] ?? 0) > 0 && !jailed && !((v.s.hd?.[v.me] ?? 0) > 0);
+      if (emoting && this.orbit === 0) this.orbitA = yaw;
+      this.orbit = emoting ? Math.min(1, this.orbit + dt * 4) : Math.max(0, this.orbit - dt * 5);
+      if (this.orbit > 0) {
+        this.orbitA += dt * 0.7;
+        const k = easeOut(this.orbit);
+        const base = (jailed ? JAIL.y : v.level * UPPER_Y) + v.jumpY;
+        const r = 3.2;
+        ex = lerp(ex, x - Math.sin(this.orbitA) * r, k);
+        ez = lerp(ez, z - Math.cos(this.orbitA) * r, k);
+        ey = lerp(ey, base + 2.2, k);
+        ax = lerp(ax, x, k);
+        ay = lerp(ay, base + 1.15, k);
+        az = lerp(az, z, k);
+      }
     }
     // Temblor si te están pegando.
     const fight = v.s.cg?.[v.me] ?? null;

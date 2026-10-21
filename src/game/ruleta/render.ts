@@ -4,7 +4,7 @@
 // La escena se dibuja en un lienzo WebGL aparte y se copia al lienzo del juego.
 import * as THREE from "three";
 import { PLAYER_COLORS } from "../core/config";
-import { badge, css, fitText, fitTitle, panel, polygon, shadowText, text, textWidth, titleText, type Ctx } from "../core/draw";
+import { badge, css, fillCircle, fitText, fitTitle, panel, polygon, shadowText, strokeCircle, text, textWidth, titleText, type Ctx } from "../core/draw";
 import {
   CUT_AT, EV_ITEM, EV_NONE, EV_SHOT, I_BEER, I_CIGS, I_CUFFS, I_INVERTER, I_LUPA, I_MEDS, I_PHONE, I_SAW, ITEM_HIT,
   ITEM_TIME, ITEMS, PH_INTRO, PH_OVER, PH_REVEAL, PH_ROUND_END, PH_TURN, REVEAL_TIME, ROUNDS, RH, RW, SHOT_HIT,
@@ -100,8 +100,8 @@ class Stage {
 
   constructor() {
     const sc = this.scene;
-    sc.background = new THREE.Color(0x000000);
-    sc.fog = new THREE.Fog(0x000000, 2.4, 6.5);
+    sc.background = new THREE.Color(0x0f0818);
+    sc.fog = new THREE.Fog(0x0f0818, 2.4, 6.5);
     sc.add(buildRoom(), buildTable(), buildLamp(), this.seatRoot);
 
     // Luz: el foco de la lámpara (con sombras) y poco más.
@@ -122,6 +122,14 @@ class Stage {
     const lampGlow = glowSprite(0xffd9a0, 0.9, 0.9);
     lampGlow.position.set(0, LAMP_Y + 0.02, 0);
     sc.add(lampGlow, this.muzzleGlow);
+    // Neones de casino: verde (izquierda), rojo (derecha), ámbar (fondo).
+    const neonGreen = new THREE.PointLight(0x00ff55, 1.1, 5.5, 2);
+    neonGreen.position.set(-3.6, 1.5, 0);
+    const neonRed = new THREE.PointLight(0xff1133, 0.8, 5.5, 2);
+    neonRed.position.set(3.6, 1.5, 0);
+    const neonAmber = new THREE.PointLight(0xffaa00, 0.9, 4.5, 2);
+    neonAmber.position.set(0, 1.5, -3.6);
+    sc.add(neonGreen, neonRed, neonAmber);
 
     this.gun = buildGun();
     sc.add(this.gun.root);
@@ -449,6 +457,17 @@ export class RuletaRenderer {
     const info = stage.update(v, this.time, { yaw: this.yaw, pitch: this.pitch });
     renderInto(ctx, stage.scene, stage.camera, RW, RH, pixelScale, 1.45);
 
+    // Viñeta de casino
+    const vg = ctx.createRadialGradient(RW / 2, RH / 2, RH * 0.12, RW / 2, RH / 2, RW * 0.78);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(0.5, "rgba(0,0,0,0)");
+    vg.addColorStop(1, "rgba(0,0,0,0.8)");
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, RW, RH);
+    // Scanlines CRT
+    ctx.fillStyle = "rgba(0,0,0,0.09)";
+    for (let sy = 0; sy < RH; sy += 2) ctx.fillRect(0, sy, RW, 1);
+
     // Fogonazo y golpe recibido
     if (info.flashK > 0) {
       const m = stage.project(info.muzzle);
@@ -468,6 +487,17 @@ export class RuletaRenderer {
     }
     this.drawLabels(ctx, v, stage, info.head, info.local);
     this.drawHud(ctx, v);
+    // Crosshair en primera persona
+    if (v.s.ph === PH_TURN && !isOut(v.s, v.me)) {
+      ctx.strokeStyle = "rgba(255,255,255,0.30)";
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(RW / 2 - 4, RH / 2); ctx.lineTo(RW / 2 - 1.5, RH / 2);
+      ctx.moveTo(RW / 2 + 1.5, RH / 2); ctx.lineTo(RW / 2 + 4, RH / 2);
+      ctx.moveTo(RW / 2, RH / 2 - 4); ctx.lineTo(RW / 2, RH / 2 - 1.5);
+      ctx.moveTo(RW / 2, RH / 2 + 1.5); ctx.lineTo(RW / 2, RH / 2 + 4);
+      ctx.stroke();
+    }
   }
 
   // --- Marcas sobre la escena ---
@@ -529,8 +559,8 @@ export class RuletaRenderer {
       const turn = s.ph === PH_TURN && s.tu === i;
       // El panel de quien tiene el turno se enciende y parpadea su borde.
       const lit = turn && Math.floor(this.time * 3) % 2 === 0;
-      panel(ctx, x, 2, pw - 2, 22, turn ? (lit ? [255, 230, 90] : [200, 150, 40]) : out ? [80, 80, 90] : [110, 90, 70], 0.7,
-        turn ? [60, 46, 10] : [10, 10, 24]);
+      panel(ctx, x, 2, pw - 2, 22, turn ? (lit ? [255, 215, 60] : [195, 148, 35]) : out ? [70, 60, 80] : [148, 118, 42], 0.9,
+        turn ? [38, 22, 6] : [15, 8, 24]);
       badge(ctx, x + 7.5, 9, 4.5, out ? [90, 90, 96] : PLAYER_COLORS[i], String(i + 1));
       const name = fitText(ctx, seatName(s, i) + (i === me ? " (tú)" : ""), pw - 34, TINY);
       text(ctx, name, x + 14, 4, out ? [150, 150, 160] : [235, 235, 245], TINY);
@@ -539,18 +569,29 @@ export class RuletaRenderer {
       const status = out ? "FUERA" : row[P_CUFF] === 1 ? "ESPOSADO" : rule.cut && row[P_LIVES] <= CUT_AT ? "SIN CURAS" : "";
       if (status) text(ctx, status, x + pw - 5, 15, out ? [200, 120, 110] : [255, 160, 90], TINY, "right");
     }
-    shadowText(ctx, `Ronda ${s.rd + 1}/${ROUNDS.length}`, 4, 27, [200, 200, 215], TINY);
+    shadowText(ctx, `Ronda ${s.rd + 1}/${ROUNDS.length}`, 4, 27, [200, 178, 120], TINY);
     if (s.sw) shadowText(ctx, "SIERRA: el próximo disparo quita 2", RW - 4, 27, [255, 120, 100], TINY, "right");
+    // Contador de cartuchos (rojo = real, azul = fogueo)
+    if (s.ph === PH_TURN) {
+      const [lv, bl] = s.ld;
+      const total = lv + bl;
+      const cx0 = RW / 2 - (total * 5.5) / 2;
+      for (let k = 0; k < total; k++) {
+        const live = k < lv;
+        fillCircle(ctx, cx0 + k * 5.5 + 2.5, 30, 2.5, live ? [210, 45, 45] : [65, 130, 215]);
+        strokeCircle(ctx, cx0 + k * 5.5 + 2.5, 30, 2.5, live ? [255, 110, 110] : [130, 185, 255], 0.7);
+      }
+    }
 
     // Carteles de fase
     if (s.ph === PH_INTRO) {
       const k = ease(s.pt / 0.4);
       ctx.globalAlpha = k;
-      panel(ctx, -2, 60, RW + 4, 56, [255, 61, 139], 0.7);
+      panel(ctx, -2, 60, RW + 4, 56, [198, 158, 38], 0.9, [20, 8, 32]);
       ctx.globalAlpha = 1;
-      titleText(ctx, `RONDA ${s.rd + 1}`, RW / 2, 64, [255, 236, 190], BIG);
+      titleText(ctx, `RONDA ${s.rd + 1}`, RW / 2, 64, [255, 218, 75], BIG);
       const extra = rule.items ? `${rule.items} objetos por carga` : "sin objetos";
-      shadowText(ctx, `${rule.lives} vidas · ${extra}`, RW / 2, 92, [230, 230, 240], SMALL, "center");
+      shadowText(ctx, `${rule.lives} vidas · ${extra}`, RW / 2, 92, [210, 195, 255], SMALL, "center");
       if (rule.cut) shadowText(ctx, `Cables cortados: con ${CUT_AT} vidas o menos no hay curas`, RW / 2, 104, [255, 140, 100], TINY, "center");
     } else if (s.ph === PH_REVEAL) {
       const [lv, bl] = s.ld;
@@ -558,16 +599,16 @@ export class RuletaRenderer {
       const b = `${bl} DE FOGUEO`;
       const wa = textWidth(ctx, a, MID), wb = textWidth(ctx, b, MID), gap = 16;
       const x0 = RW / 2 - (wa + wb + gap) / 2;
-      panel(ctx, x0 - 8, 35, wa + wb + gap + 16, 20, [235, 235, 245], 0.75);
-      shadowText(ctx, a, x0, 40, [255, 90, 80], MID);
-      shadowText(ctx, "·", x0 + wa + gap / 2, 40, [200, 200, 200], MID, "center");
-      shadowText(ctx, b, x0 + wa + gap, 40, [150, 195, 255], MID);
+      panel(ctx, x0 - 8, 35, wa + wb + gap + 16, 20, [198, 162, 42], 0.92, [20, 8, 32]);
+      shadowText(ctx, a, x0, 40, [255, 75, 75], MID);
+      shadowText(ctx, "·", x0 + wa + gap / 2, 40, [198, 172, 95], MID, "center");
+      shadowText(ctx, b, x0 + wa + gap, 40, [105, 175, 255], MID);
     } else if (s.ph === PH_ROUND_END) {
       const w = s.rw;
       const title = w < 0 ? "RONDA SIN GANADOR" : w === me ? "¡GANAS LA RONDA!" : `${seatName(s, w).toUpperCase()} GANA LA RONDA`;
-      panel(ctx, -2, 68, RW + 4, 38, w >= 0 ? PLAYER_COLORS[w] : [235, 235, 245], 0.7);
-      titleText(ctx, fitTitle(ctx, title, RW - 12, "14px"), RW / 2, 74, w >= 0 ? PLAYER_COLORS[w] : [235, 235, 245], "14px");
-      if (s.rd + 1 < ROUNDS.length) shadowText(ctx, "Siguiente ronda...", RW / 2, 94, [210, 210, 220], TINY, "center");
+      panel(ctx, -2, 68, RW + 4, 38, w >= 0 ? PLAYER_COLORS[w] : [198, 162, 42], 0.85, [15, 8, 22]);
+      titleText(ctx, fitTitle(ctx, title, RW - 12, "14px"), RW / 2, 74, w >= 0 ? PLAYER_COLORS[w] : [255, 215, 70], "14px");
+      if (s.rd + 1 < ROUNDS.length) shadowText(ctx, "Siguiente ronda...", RW / 2, 94, [185, 170, 220], TINY, "center");
     } else if (s.ph === PH_OVER) {
       this.drawResults(ctx, v);
     }
@@ -589,7 +630,7 @@ export class RuletaRenderer {
     if (v.netLabel) shadowText(ctx, v.netLabel, RW - 4, RH - 36, [190, 190, 210], TINY, "right");
 
     // Barra inferior: tu selección, o de quién es el turno.
-    panel(ctx, -2, RH - 27, RW + 4, 29, [255, 207, 80], 0.8);
+    panel(ctx, -2, RH - 27, RW + 4, 29, [198, 162, 42], 0.94, [15, 8, 22]);
     let line1 = v.label, line2 = v.hint;
     if (!line1 && s.ph === PH_TURN) {
       line1 = s.tu === me ? (s.bz ? "..." : "Tu turno") : `Turno de ${seatName(s, s.tu)}`;
@@ -606,8 +647,8 @@ export class RuletaRenderer {
     const winners = order.filter((o) => o.w === best);
     const title = winners.length > 1 ? "¡EMPATE!" : winners[0].i === me ? "¡HAS GANADO LA PARTIDA!" : `¡GANA ${seatName(s, winners[0].i).toUpperCase()}!`;
     const top = 38;
-    panel(ctx, 40, top, RW - 80, 34 + order.length * 14, [255, 61, 139], 0.85);
-    titleText(ctx, fitTitle(ctx, title, RW - 90, MID), RW / 2, top + 5, winners.length === 1 ? PLAYER_COLORS[winners[0].i] : [235, 235, 245], MID);
+    panel(ctx, 40, top, RW - 80, 34 + order.length * 14, [198, 158, 38], 0.92, [18, 8, 28]);
+    titleText(ctx, fitTitle(ctx, title, RW - 90, MID), RW / 2, top + 5, winners.length === 1 ? PLAYER_COLORS[winners[0].i] : [255, 215, 70], MID);
     text(ctx, "Rondas", RW - 50, top + 20, [170, 170, 190], TINY, "right");
     order.forEach((o, k) => {
       const y = top + 28 + k * 14;
