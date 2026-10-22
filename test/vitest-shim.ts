@@ -29,12 +29,19 @@ class Expect {
   }
   toBe(x: unknown) { this.ok(Object.is(this.v, x), `debía ser ${JSON.stringify(x)}`); }
   toBeNull() { this.ok(this.v === null, "debía ser null"); }
+  toBeUndefined() { this.ok(this.v === undefined, "debía ser undefined"); }
   toBeTruthy() { this.ok(!!this.v, "debía ser verdadero"); }
+  toBeFalsy() { this.ok(!this.v, "debía ser falso"); }
   toBeCloseTo(x: number, digits = 2) { this.ok(Math.abs((this.v as number) - x) < Math.pow(10, -digits) / 2, `debía estar cerca de ${x}`); }
   toBeGreaterThan(x: number) { this.ok((this.v as number) > x, `debía ser > ${x}`); }
   toBeGreaterThanOrEqual(x: number) { this.ok((this.v as number) >= x, `debía ser ≥ ${x}`); }
   toBeLessThan(x: number) { this.ok((this.v as number) < x, `debía ser < ${x}`); }
   toBeLessThanOrEqual(x: number) { this.ok((this.v as number) <= x, `debía ser ≤ ${x}`); }
+  toEqual(x: unknown) {
+    const a = JSON.stringify(this.v);
+    const b = JSON.stringify(x);
+    this.ok(a === b, `debía ser igual a ${b} (valor: ${a})`);
+  }
 }
 
 export const expect = (v: unknown) => new Expect(v);

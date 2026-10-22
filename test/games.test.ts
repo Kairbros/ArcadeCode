@@ -58,7 +58,7 @@ import { check } from "./lib";
   const run = (s: number) => { for (let i = 0; i < s * 60; i++) { host.update(1 / 60); guest.update(1 / 60); } };
   run(1);
   check(guest.game?.id === "bomber" && !!guest.game.ready, "red: el invitado entra en bomber");
-  for (const id of ["karts", "survival", "deadzone", "casino", "bomber"] as const) {
+  for (const id of ["karts", "survival", "deadzone", "casino", "cards", "bomber"] as const) {
     host.switchGame(id); run(1);
     check(guest.game?.id === id && !!guest.game.ready, `red: cambio a ${id}`, `${guest.size.join("×")}`);
   }
