@@ -96,8 +96,10 @@ ZOMBIES.hound = {
 };
 
 export const ENEMY_SCALING = {
-  /** +9 % de vida por ronda. */
-  hpPerRound: 0.09,
+  /** Vida extra por ronda hasta la 9 (fracción de la base) y multiplicador por ronda desde la 10. */
+  hpGrowth: 0.9,
+  bruteHpGrowth: 0.25,
+  hpLateMult: 1.1,
   /** +0.05 m/s por ronda, con tope multiplicador. */
   speedPerRound: 0.05,
   speedMultMax: 1.45,
@@ -106,9 +108,17 @@ export const ENEMY_SCALING = {
   damageMultMax: 1.7,
 } as const;
 
+/**
+ * Vida por ronda al estilo Call of Duty: hasta la ronda 9 sube una cantidad fija cada ronda (ya en la 2 un tiro a la cabeza
+ * no basta) y desde la 10 se multiplica por 1,1 cada ronda. El bruto, que ya parte de mucha vida, sube más despacio.
+ */
 export function scaledHp(kind: ZombieKind, round: number): number {
   const def = ZOMBIES[kind];
-  return Math.round(def.hp * (1 + ENEMY_SCALING.hpPerRound * (round - 1)));
+  const growth = kind === "brute" ? ENEMY_SCALING.bruteHpGrowth : ENEMY_SCALING.hpGrowth;
+  const r = Math.max(1, Math.floor(round));
+  const linear = 1 + growth * (Math.min(r, 9) - 1);
+  const late = Math.pow(ENEMY_SCALING.hpLateMult, Math.max(0, r - 9));
+  return Math.round(def.hp * linear * late);
 }
 
 export function scaledSpeed(kind: ZombieKind, round: number): number {

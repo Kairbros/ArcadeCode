@@ -3,6 +3,7 @@
 // partículas son una nube en la GPU (`particles.ts`) y las manchas, mallas instanciadas (`DecalPool`): el coste no
 // crece con la cantidad de sangre.
 import * as THREE from "three";
+import { raycastWorld, type Collider } from "../core/collision";
 import { DecalPool } from "../world/decals";
 import { Particles } from "./particles";
 
@@ -46,6 +47,8 @@ export class Effects {
   private readonly c = new THREE.Color();
   private groundBudget = 0;
   private readonly tmpN = new THREE.Vector3();
+  private colliders: readonly Collider[] = [];
+  private wallBudget = 0;
 
   constructor(scene: THREE.Scene) {
     scene.add(this.group);
@@ -99,6 +102,11 @@ export class Effects {
     slot.life = slot.max;
   }
 
+  /** Escenario contra el que la sangre salpica las paredes. */
+  setWorld(colliders: readonly Collider[]): void {
+    this.colliders = colliders;
+  }
+
   /** Chispas o salpicadura genérica: `n` partículas desde un punto (color 0xRRGGBB). */
   burst(at: THREE.Vector3, n = 6, color = 0xffaa55, spread = 2.2): void {
     this.c.setHex(color);
@@ -136,30 +144,40 @@ export class Effects {
     if (Math.random() < 0.6) this.chunk(at, n, 0x8a8478, 0.02, 0.02, 0.02, 2.5, 3);
   }
 
-  /** Sangre al dar a un zombi: gotas en la dirección del tiro, bruma y manchas al caer. */
+  /** Sangre al dar a un zombi: chorro rojo vivo en la dirección del tiro, bruma, manchas en el suelo y en la pared de detrás. */
   blood(at: THREE.Vector3, dir: THREE.Vector3, amount = 9, head = false): void {
-    const n = Math.round(amount * (head ? 1.8 : 1));
+    const n = Math.round(amount * (head ? 2 : 1.4));
     for (let i = 0; i < n; i++) {
-      const sp = 1.4 + Math.random() * 4.2;
+      const sp = 1.6 + Math.random() * 4.6;
       this.particles.mix.emit({
         x: at.x, y: at.y, z: at.z,
-        vx: dir.x * sp + (Math.random() - 0.5) * 2.2, vy: dir.y * sp + Math.random() * 1.8, vz: dir.z * sp + (Math.random() - 0.5) * 2.2,
-        life: 0.5 + Math.random() * 0.7, s0: 0.035 + Math.random() * 0.045, s1: 0.03, r: 0.42 + Math.random() * 0.15, g: 0.015, b: 0.02, a: 0.95, gravity: 9.5, drag: 0.5, ground: true,
+        vx: dir.x * sp + (Math.random() - 0.5) * 2.4, vy: dir.y * sp + Math.random() * 2, vz: dir.z * sp + (Math.random() - 0.5) * 2.4,
+        life: 0.6 + Math.random() * 0.8, s0: 0.06 + Math.random() * 0.07, s1: 0.045, r: 0.85 + Math.random() * 0.15, g: 0.03, b: 0.04, a: 1, gravity: 9.5, drag: 0.45, ground: true,
       });
     }
-    for (let i = 0; i < (head ? 5 : 3); i++) {
+    // Bruma roja que se queda un instante en el aire.
+    for (let i = 0; i < (head ? 7 : 4); i++) {
       this.particles.mix.emit({
         x: at.x, y: at.y, z: at.z,
-        vx: dir.x * 1.2 + (Math.random() - 0.5) * 0.8, vy: 0.4 + Math.random() * 0.6, vz: dir.z * 1.2 + (Math.random() - 0.5) * 0.8,
-        life: 0.35 + Math.random() * 0.25, s0: 0.12, s1: 0.45, r: 0.4, g: 0.02, b: 0.03, a: 0.4, drag: 3, gravity: 0.4,
+        vx: dir.x * 1.2 + (Math.random() - 0.5) * 0.9, vy: 0.4 + Math.random() * 0.7, vz: dir.z * 1.2 + (Math.random() - 0.5) * 0.9,
+        life: 0.4 + Math.random() * 0.3, s0: 0.16, s1: 0.6, r: 0.8, g: 0.03, b: 0.04, a: 0.55, drag: 3, gravity: 0.4,
       });
+    }
+    // Mancha en el suelo bajo el impacto y, si hay pared detrás, salpicadura en ella.
+    if (Math.random() < (head ? 1 : 0.6)) this.decals.splat(this.v.set(at.x + dir.x * 0.5, 0.02, at.z + dir.z * 0.5), UP, 0.35 + Math.random() * 0.6, 1);
+    if (this.wallBudget > 0 && this.colliders.length && (head || Math.random() < 0.45)) {
+      const hit = raycastWorld(at, this.tmpN.set(dir.x, dir.y * 0.4, dir.z).normalize(), 4.5, this.colliders, (c) => c.tag === "wall" || c.tag === "prop" || c.tag === "door");
+      if (hit) {
+        this.wallBudget--;
+        this.decals.splat(this.v.set(hit.point.x, hit.point.y, hit.point.z), this.tmpN.set(hit.normal.x, hit.normal.y, hit.normal.z), (head ? 0.9 : 0.55) + Math.random() * 0.6, 1);
+      }
     }
   }
 
   /** Charco bajo un zombi caído y salpicaduras alrededor. */
   corpseBlood(x: number, z: number): void {
-    this.decals.splat(this.v.set(x, 0.02, z), UP, 1.6 + Math.random() * 1.0, 0.85);
-    for (let i = 0; i < 3; i++) this.decals.splat(this.v.set(x + (Math.random() - 0.5) * 1.6, 0.02, z + (Math.random() - 0.5) * 1.6), UP, 0.4 + Math.random() * 0.5, 0.8);
+    this.decals.splat(this.v.set(x, 0.02, z), UP, 2.2 + Math.random() * 1.2, 1);
+    for (let i = 0; i < 5; i++) this.decals.splat(this.v.set(x + (Math.random() - 0.5) * 2.2, 0.02, z + (Math.random() - 0.5) * 2.2), UP, 0.5 + Math.random() * 0.7, 0.95);
   }
 
   /** Cabeza reventada: trozos que vuelan, una nube roja y varias manchas. */
@@ -231,11 +249,12 @@ export class Effects {
       (t.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, t.life / t.max) * 0.9;
       if (t.life <= 0) t.mesh.visible = false;
     }
-    this.groundBudget = 3;
+    this.groundBudget = 4;
+    this.wallBudget = 2;
     this.particles.update(dt, (x, z) => {
-      if (this.groundBudget <= 0 || Math.random() > 0.35) return;
+      if (this.groundBudget <= 0 || Math.random() > 0.5) return;
       this.groundBudget--;
-      this.decals.splat(this.v.set(x, 0.02, z), UP, 0.22 + Math.random() * 0.5, 0.9);
+      this.decals.splat(this.v.set(x, 0.02, z), UP, 0.28 + Math.random() * 0.6, 1);
     });
 
     // Casquillos y trozos: caen, rebotan y se quedan quietos.

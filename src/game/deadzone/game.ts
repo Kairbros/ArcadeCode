@@ -29,6 +29,11 @@ import { BOX_PRICE, KNIFE, SIGHTS, weaponAt, weaponDef, weaponIndex } from "./we
 import { WeaponSystem, type Shot } from "./weapons/system";
 import { MAX_PLANKS } from "./world/map";
 
+/** «Salir al menú» desde la pausa: lo recoge main.ts (el juego no conoce el menú del hub). */
+function quitToMenu(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("arcade-quit"));
+}
+
 const r2 = (v: number) => Math.round(v * 100) / 100;
 const r1 = (v: number) => Math.round(v * 10) / 10;
 const num = (v: unknown, def: number) => (typeof v === "number" && Number.isFinite(v) ? v : def);
@@ -153,6 +158,8 @@ class Feedback {
   /** Último poder cogido y segundos desde el último Katabum. */
   power: { kind: PowerKind; t: number } | null = null;
   nukeT = 9;
+  /** Cambio de ronda en curso (marcas de sangre y música). */
+  roundFx: { kind: "start" | "end"; num: number; t: number; special: boolean } | null = null;
 
   constructor(
     private audio: AudioSystem,
@@ -170,6 +177,10 @@ class Feedback {
     this.hitT += dt;
     this.damageT += dt;
     this.nukeT += dt;
+    if (this.roundFx) {
+      this.roundFx.t += dt;
+      if (this.roundFx.t > 5.4) this.roundFx = null;
+    }
     if (this.power) {
       this.power.t -= dt;
       if (this.power.t <= 0) this.power = null;
@@ -201,6 +212,8 @@ class Feedback {
         const at = new THREE.Vector3(Number(e[4]), Number(e[5]), Number(e[6]));
         const dir = new THREE.Vector3(Number(e[7]) || 0, 0.12, Number(e[8]) || 0);
         this.stage.effects.blood(at, dir, 8, e[3] === 1);
+        // En el anfitrión `Zombie.hit` ya tiñe el cuerpo; los invitados lo hacen aquí.
+        if (!this.stage.nav) this.stage.zombies.list.find((z) => z.id === Number(e[10]))?.stain();
         if (e[9] === 1 && e[3] === 1) {
           this.stage.zombies.list.find((z) => z.id === Number(e[10]))?.popHead();
           this.stage.effects.gibs(at, dir);
@@ -231,9 +244,11 @@ class Feedback {
         if (near(Number(e[3]), Number(e[4]), 24)) this.audio.growl(Number(e[2]));
         break;
       case EV_ROUND_START:
-        this.audio.roundStart();
+        this.roundFx = { kind: "start", num: Number(e[2]) || 1, t: 0, special: e[3] === 1 };
+        this.audio.roundStart(e[3] === 1);
         break;
       case EV_ROUND_END:
+        this.roundFx = { kind: "end", num: Number(e[2]) || 1, t: 0, special: false };
         this.audio.roundEnd();
         break;
       case EV_DOWN:
@@ -293,7 +308,7 @@ class Feedback {
 }
 
 /** Nombres sobre los demás jugadores (con su vida), dibujados en 2D. */
-function drawNames(ctx: CanvasRenderingContext2D, stage: DzStage, rows: { name: string; x: number; y: number; z: number; alive: boolean; color: readonly [number, number, number] }[]) {
+function drawNames(ctx: CanvasRenderingContext2D, stage: DzStage, rows: { name: string; x: number; y: number; z: number; alive: boolean; color: readonly [number, number, number]; tag?: string }[]) {
   for (const r of rows) {
     const at = stage.project(r.x, r.y + 2.0, r.z);
     if (!at || at[2] > 45) continue;
@@ -301,7 +316,7 @@ function drawNames(ctx: CanvasRenderingContext2D, stage: DzStage, rows: { name: 
     ctx.font = "6px monospace";
     ctx.fillStyle = r.alive ? `rgb(${r.color[0]},${r.color[1]},${r.color[2]})` : "rgb(255,90,74)";
     ctx.textAlign = "center";
-    ctx.fillText(r.alive ? r.name : `${r.name} ✝`, at[0], at[1]);
+    ctx.fillText(r.alive ? r.name : r.tag ? `${r.name} · ABATIDO ${r.tag}` : `${r.name} ✝`, at[0], at[1]);
     ctx.restore();
   }
 }
@@ -361,6 +376,9 @@ export class DeadZoneHost implements HostGame {
   phase: "menu" | "play" = "play";
   mapId: MapId;
   menuIndex = 0;
+  /** Menú de pausa. Con un solo jugador congela la partida; con compañeros la partida sigue. */
+  paused = false;
+  pauseIndex = 0;
   over = false;
   /** Fin de partida (para poder cambiar de juego con J). */
   get finished(): boolean {
@@ -429,6 +447,56 @@ export class DeadZoneHost implements HostGame {
     this.restart();
   }
 
+  // --- Pausa -----------------------------------------------------------------------------------
+  private setPaused(on: boolean) {
+    if (on === this.paused) return;
+    this.paused = on;
+    this.pauseIndex = 0;
+    this.audio.pause(on);
+    if (on && typeof document !== "undefined") document.exitPointerLock?.();
+  }
+
+  private pauseItems(): string[] {
+    return ["CONTINUAR", "REINICIAR PARTIDA", "CAMBIAR DE MAPA", `SONIDO: ${this.audio.muted ? "NO" : "SÍ"}`, "SALIR AL MENÚ"];
+  }
+
+  private pauseControl() {
+    const n = this.pauseItems().length;
+    if (this.input.take("ArrowUp") || this.input.take("KeyW")) this.pauseIndex = (this.pauseIndex + n - 1) % n;
+    if (this.input.take("ArrowDown") || this.input.take("KeyS")) this.pauseIndex = (this.pauseIndex + 1) % n;
+    if (!(this.input.take("Enter") || this.input.take("Space"))) return;
+    switch (this.pauseIndex) {
+      case 0:
+        this.setPaused(false);
+        break;
+      case 1:
+        this.setPaused(false);
+        this.restart();
+        break;
+      case 2:
+        this.setPaused(false);
+        this.phase = "menu";
+        break;
+      case 3:
+        this.audio.setMuted(!this.audio.muted);
+        break;
+      default:
+        quitToMenu();
+    }
+  }
+
+  /** Esc: abre o cierra la pausa (en el selector de mapa sale al menú del hub). */
+  escape(): boolean {
+    if (this.phase === "menu") return false;
+    this.setPaused(!this.paused);
+    return true;
+  }
+
+  private pauseView(): DzHudView["pause"] {
+    if (!this.paused) return null;
+    return { index: this.pauseIndex, items: this.pauseItems(), coop: this.online.filter(Boolean).length > 1, round: Math.max(1, this.rounds.round), points: this.seats[0].points.balance };
+  }
+
   /** Teclas del selector de mapa. */
   private menuControl() {
     const n = MAP_IDS.length;
@@ -493,15 +561,23 @@ export class DeadZoneHost implements HostGame {
   // --- Bucle ---------------------------------------------------------------------------------
   update(dtRaw: number) {
     const dt = Math.min(0.05, dtRaw);
-    this.time += dt;
     this.input.poll();
     if (this.input.takeGesture()) this.audio.unlock();
+    if (this.phase === "play" && this.input.take("KeyP")) this.setPaused(!this.paused);
+    if (this.paused) this.pauseControl();
+    if (this.paused && this.online.filter(Boolean).length === 1) {
+      // Solo contra las oleadas: el tiempo se detiene.
+      this.input.clear();
+      return;
+    }
+    this.time += dt;
     this.fb.tick(dt);
     while (this.events.length && this.time - this.events[0].at > 4) this.events.shift();
 
     if (this.phase === "menu") this.menuControl();
     if (!this.over && this.phase === "play") {
-      this.localControl(dt);
+      if (this.paused) this.idleLocal();
+      else this.localControl(dt);
       for (let i = 1; i < MAX_PLAYERS; i++) if (this.online[i]) this.remoteControl(i, dt);
       this.tickPowers(dt);
       this.tickDown(dt);
@@ -527,19 +603,27 @@ export class DeadZoneHost implements HostGame {
     this.input.clear();
   }
 
+  /** Con el menú de pausa abierto en cooperativo, el jugador local se queda quieto y sin pulsar nada. */
+  private idleLocal() {
+    const s = this.seats[0];
+    s.fireHeld = s.firePressed = s.useHeld = s.usePressed = s.reloadReq = s.meleeReq = s.ads = false;
+    s.selectReq = -1;
+    this.input.consumeLook();
+  }
+
   /** Mirar, moverse y teclas del jugador local (el 0). */
   private localControl(dt: number) {
     const s = this.seats[0];
     const p = s.p;
     const look = this.input.consumeLook();
-    if (p.alive) p.look(look.x, look.y, this.input.sensitivity);
+    if (p.alive || p.downed) p.look(look.x, look.y, this.input.sensitivity);
     p.update(dt, this.input, this.stage.map.colliders);
     p.onStep = (running) => this.audio.step(running);
     // Teclas de un solo uso.
     const wanted = this.input.take("Digit1") ? 0 : this.input.take("Digit2") ? 1 : this.input.take("Digit3") ? 2 : -1;
     s.selectReq = wanted;
     s.reloadReq = this.input.take("KeyR");
-    s.meleeReq = this.input.take("KeyV");
+    s.meleeReq = this.input.take("KeyV") || this.input.take("KeyQ");
     if (this.input.take("KeyF")) {
       this.flashOn = !this.flashOn;
       this.stage.setFlashlight(this.flashOn);
@@ -567,7 +651,7 @@ export class DeadZoneHost implements HostGame {
       s.meleeCd = Math.max(0, s.meleeCd - dt);
       s.sinceHurt += dt;
       if (s.p.alive && s.sinceHurt > PERK_TUNING.regenDelay && s.p.health < s.p.maxHealth) s.p.heal(dt * s.p.maxHealth * 0.35);
-      if (!s.p.alive) {
+      if (!s.p.alive && !s.p.downed) {
         s.firePressed = s.reloadReq = s.usePressed = s.meleeReq = false;
         s.selectReq = -1;
         s.prompt = null;
@@ -606,7 +690,7 @@ export class DeadZoneHost implements HostGame {
       const down = s.fireHeld || s.fireHold > 0;
       // Cuchillo: con V, o con el gatillo cuando no queda ni una bala.
       const noAmmo = s.weapons.outOfAmmo && s.weapons.state === "ready";
-      if ((s.meleeReq || (noAmmo && (s.firePressed || down))) && s.meleeCd <= 0) {
+      if (!s.p.downed && (s.meleeReq || (noAmmo && (s.firePressed || down))) && s.meleeCd <= 0) {
         this.knife(i);
         s.firePressed = false;
       }
@@ -624,6 +708,13 @@ export class DeadZoneHost implements HostGame {
         }
       }
       s.firePressed = false;
+      if (s.p.downed) {
+        // Abatido: solo dispara y recarga; no usa ni compra nada.
+        s.usePressed = false;
+        s.prompt = null;
+        if (i === 0) this.prompt = null;
+        return;
+      }
       this.interactSeat(i, dt);
     });
     void dt;
@@ -885,6 +976,12 @@ export class DeadZoneHost implements HostGame {
       s.down = 0;
       this.emit(EV_TOAST, -1, `${this.nameOf(i)} HA CAÍDO`, 2);
     }
+    // Abatido pero con opción de revivir: se arrastra y dispara con la pistola.
+    s.p.downed = s.down > 0;
+    if (s.p.downed) {
+      s.weapons.enterSidearm();
+      if (i === 0) this.syncView();
+    }
   }
 
   /** Quien está abatido se desangra, se levanta solo (Quick Revive en solitario) o pierde progreso si nadie lo atiende. */
@@ -903,6 +1000,9 @@ export class DeadZoneHost implements HostGame {
       if (s.down <= 0) {
         s.down = 0;
         s.reviveProg = 0;
+        s.p.downed = false;
+        s.weapons.leaveSidearm();
+        if (i === 0) this.syncView();
         this.emit(EV_TOAST, -1, `${this.nameOf(i)} SE HA DESANGRADO`, 2);
       }
     });
@@ -912,6 +1012,9 @@ export class DeadZoneHost implements HostGame {
   private revive(i: number) {
     const s = this.seats[i];
     s.p.health = s.p.maxHealth;
+    s.p.downed = false;
+    s.weapons.leaveSidearm();
+    if (i === 0) this.syncView();
     s.down = 0;
     s.reviveProg = 0;
     s.beingRevived = false;
@@ -998,13 +1101,12 @@ export class DeadZoneHost implements HostGame {
     for (const e of events) {
       if (e.type === "roundStart") {
         this.emit(EV_BANNER, e.round, e.special ? `¡PERROS INFERNALES! · ${e.total}` : `${e.total} INFECTADOS`);
-        this.emit(EV_ROUND_START);
-        if (e.special) this.emit(EV_SOUND, -2, "houndStart");
+        this.emit(EV_ROUND_START, e.round, e.special ? 1 : 0);
         this.emit(EV_TOAST, -1, `RONDA ${e.round}`, 0);
       } else if (e.type === "spawn") {
         this.spawnZombie();
       } else if (e.type === "roundEnd") {
-        this.emit(EV_ROUND_END);
+        this.emit(EV_ROUND_END, e.round);
         const bonus = POINTS.roundBonus + e.round * 25;
         this.seats.forEach((s, i) => {
           if (!this.online[i]) return;
@@ -1071,7 +1173,7 @@ export class DeadZoneHost implements HostGame {
     const w = s.weapons;
     const a = w.currentAmmo;
     return [
-      weaponIndex(w.slots[0]), weaponIndex(w.slots[1]), weaponIndex(w.slots[2]), w.index, a.mag, a.reserve,
+      weaponIndex(w.slots[0]), weaponIndex(w.slots[1]), weaponIndex(w.slots[2] ?? null), w.index, a.mag, a.reserve,
       w.state === "reloading" ? 1 : w.state === "switching" ? 2 : 0, Math.round(w.reloadProgress * 100), w.upgradeMask,
     ];
   }
@@ -1095,7 +1197,7 @@ export class DeadZoneHost implements HostGame {
       ak: [...this.acks],
       pl: this.seats.map((s) => [
         r2(s.p.position.x), r2(s.p.position.y), r2(s.p.position.z), r2(s.p.yaw), r2(s.p.pitch), Math.round(s.p.health),
-        (s.p.alive ? 1 : 0) | (s.p.crouching ? 2 : 0) | (s.p.sprinting ? 4 : 0) | (s.ads ? 8 : 0),
+        (s.p.alive ? 1 : 0) | (s.p.crouching ? 2 : 0) | (s.p.sprinting ? 4 : 0) | (s.ads ? 8 : 0) | (s.p.downed ? 16 : 0),
         weaponIndex(s.weapons.currentId), s.fireSeq, s.reviveSeq, s.kills, s.weapons.currentId && s.weapons.upg[s.weapons.currentId] ? 1 : 0,
       ]),
       pt: this.seats.map((s) => s.points.balance),
@@ -1130,7 +1232,7 @@ export class DeadZoneHost implements HostGame {
     if (!m || m.t !== "z" || index < 1 || index > 3 || !this.online[index]) return;
     const s = this.seats[index];
     // Posición y mirada: las manda el invitado (dueño de su cuerpo) salvo que aún no sepa que reapareció.
-    if (s.p.alive && int(m.rv, -1) === s.reviveSeq) {
+    if ((s.p.alive || s.p.downed) && int(m.rv, -1) === s.reviveSeq) {
       s.p.position.set(num(m.x, s.p.position.x), clamp(num(m.y, 0), 0, 8), num(m.z, s.p.position.z));
       s.p.yaw = num(m.yaw, s.p.yaw);
       s.p.pitch = clamp(num(m.pitch, 0), -1.45, 1.45);
@@ -1167,7 +1269,7 @@ export class DeadZoneHost implements HostGame {
     this.ads = damp(this.ads, s.ads ? 1 : 0, 10, dt);
     const move = clamp(Math.hypot(p.velocity.x, p.velocity.z) / PLAYER.sprint, 0, 1);
     this.stage.updateCamera(
-      { x: p.position.x, eyeY: p.eyeY, z: p.position.z, yaw: p.yaw, pitch: p.pitch, lean: p.lean, shake: p.shake, sprinting: p.sprinting, ads: this.ads > 0.5, adsFov: s.weapons.currentId ? SIGHTS[s.weapons.currentId].fov : undefined, alive: p.alive, moving: p.alive ? move : 0 },
+      { x: p.position.x, eyeY: p.eyeY, z: p.position.z, yaw: p.yaw, pitch: p.pitch, lean: p.lean, shake: p.shake, sprinting: p.sprinting, ads: this.ads > 0.5, adsFov: s.weapons.currentId ? SIGHTS[s.weapons.currentId].fov : undefined, alive: p.alive || p.downed, moving: p.alive || p.downed ? move : 0, spec: this.specView() ?? undefined },
       dt,
     );
     this.stagePost(dt, p.health, this.fb.damageT, move);
@@ -1180,7 +1282,7 @@ export class DeadZoneHost implements HostGame {
       sprinting: p.sprinting,
       ads: this.ads > 0.5,
       reloading: s.weapons.state === "reloading",
-      hidden: !p.alive,
+      hidden: !(p.alive || p.downed),
     });
     // Los demás jugadores.
     for (let i = 1; i < MAX_PLAYERS; i++) {
@@ -1192,6 +1294,20 @@ export class DeadZoneHost implements HostGame {
       else av.setWeapon(q.weapons.currentId, !!q.weapons.currentId && q.weapons.upg[q.weapons.currentId]);
       av.set(dt, q.p.position.x, q.p.position.y, q.p.position.z, q.p.yaw, q.p.pitch, q.p.crouching, q.p.alive);
     }
+  }
+
+  /** Muerto (no abatido): se ve por los ojos de un compañero vivo. */
+  private specTarget(): number {
+    const me = this.seats[0];
+    if (me.p.alive || me.p.downed || this.over) return -1;
+    return this.seats.findIndex((q, k) => k > 0 && this.online[k] && q.p.alive);
+  }
+
+  private specView(): { x: number; eyeY: number; z: number; yaw: number; pitch: number } | null {
+    const k = this.specTarget();
+    if (k < 0) return null;
+    const q = this.seats[k].p;
+    return { x: q.position.x, eyeY: q.eyeY, z: q.position.z, yaw: q.yaw, pitch: q.pitch };
   }
 
   /** Pasa al postproceso cómo va el jugador: daño reciente, poca vida, apuntando y corriendo. */
@@ -1247,6 +1363,10 @@ export class DeadZoneHost implements HostGame {
         .filter(({ i }) => this.online[i])
         .map(({ q, i }) => ({ name: PLAYER_NAMES[i] ?? `J${i + 1}`, color: PLAYER_COLORS[i] ?? PLAYER_COLORS[0], health: q.p.health, alive: q.p.alive, points: q.points.balance, me: i === 0 })),
       alive: s.p.alive,
+      downed: s.p.downed,
+      pause: this.pauseView(),
+      roundFx: this.fb.roundFx,
+      spec: this.specTarget() >= 0 ? this.nameOf(this.specTarget()) : null,
       over: this.over ? { round: Math.max(1, rm.round), points: this.seats.reduce((x, q, i) => x + (this.online[i] ? q.points.balance : 0), 0), kills: this.kills } : null,
       netLabel: this.netLabel,
       look: lookMode(),
@@ -1273,7 +1393,7 @@ export class DeadZoneHost implements HostGame {
       this.seats
         .map((q, i) => ({ q, i }))
         .filter(({ q, i }) => i > 0 && this.online[i] && q.p.alive !== undefined)
-        .map(({ q, i }) => ({ name: PLAYER_NAMES[i] ?? `J${i + 1}`, x: q.p.position.x, y: q.p.position.y, z: q.p.position.z, alive: q.p.alive, color: PLAYER_COLORS[i] ?? PLAYER_COLORS[0] })),
+        .map(({ q, i }) => ({ name: PLAYER_NAMES[i] ?? `J${i + 1}`, x: q.p.position.x, y: q.p.position.y, z: q.p.position.z, alive: q.p.alive, color: PLAYER_COLORS[i] ?? PLAYER_COLORS[0], tag: q.down > 0 && !q.p.alive ? `${Math.ceil(q.down)}S` : undefined })),
     );
     drawHud(ctx, this.hudView());
   }
@@ -1308,6 +1428,8 @@ export class DeadZoneGuest implements GuestGame {
   private flashOn = false;
   private lastFlags = -1;
   private fireInit = false;
+  private paused = false;
+  private pauseIndex = 0;
 
   constructor(private index: number, private input: Input) {
     this.fb = new Feedback(this.audio, this.stage, () => this.index, () => this.player.position, () => (this.player.shake = Math.min(1, this.player.shake + 0.4)));
@@ -1317,6 +1439,51 @@ export class DeadZoneGuest implements GuestGame {
 
   get ready() {
     return this.state !== null;
+  }
+
+  // --- Pausa (solo local: la partida del anfitrión sigue) ---
+  private setPaused(on: boolean) {
+    if (on === this.paused) return;
+    this.paused = on;
+    this.pauseIndex = 0;
+    this.audio.pause(on);
+    if (on && typeof document !== "undefined") document.exitPointerLock?.();
+  }
+
+  private pauseItems(): string[] {
+    return ["CONTINUAR", `SONIDO: ${this.audio.muted ? "NO" : "SÍ"}`, "SALIR AL MENÚ"];
+  }
+
+  private pauseControl() {
+    const n = this.pauseItems().length;
+    if (this.input.take("ArrowUp") || this.input.take("KeyW")) this.pauseIndex = (this.pauseIndex + n - 1) % n;
+    if (this.input.take("ArrowDown") || this.input.take("KeyS")) this.pauseIndex = (this.pauseIndex + 1) % n;
+    if (!(this.input.take("Enter") || this.input.take("Space"))) return;
+    if (this.pauseIndex === 0) this.setPaused(false);
+    else if (this.pauseIndex === 1) this.audio.setMuted(!this.audio.muted);
+    else quitToMenu();
+  }
+
+  escape(): boolean {
+    if (!this.state || this.state.st === 0) return false;
+    this.setPaused(!this.paused);
+    return true;
+  }
+
+  /** Muerto: se ve por los ojos de un compañero vivo. */
+  private specIndex(): number {
+    const s = this.state;
+    if (!s) return -1;
+    const mine = s.pl[this.index];
+    if (!mine || (mine[6] & 1) !== 0 || (mine[6] & 16) !== 0 || s.ov) return -1;
+    return s.pl.findIndex((row, k) => k !== this.index && s.on[k] === 1 && (row[6] & 1) !== 0);
+  }
+
+  private specView(): { x: number; eyeY: number; z: number; yaw: number; pitch: number } | null {
+    const k = this.specIndex();
+    if (k < 0) return null;
+    const row = this.state!.pl[k];
+    return { x: row[0], eyeY: row[1] + 1.62, z: row[2], yaw: row[3], pitch: row[4] };
   }
 
   onBase() {}
@@ -1371,6 +1538,8 @@ export class DeadZoneGuest implements GuestGame {
     const s = this.state;
     const p = this.player;
     if (!s) return;
+    if (this.input.take("KeyP") && s.st !== 0) this.setPaused(!this.paused);
+    if (this.paused) this.pauseControl();
     if (s.st === 0) {
       // El anfitrión aún elige el mapa: solo se ve el selector.
       this.input.clear();
@@ -1380,26 +1549,30 @@ export class DeadZoneGuest implements GuestGame {
     const mine = s.pl[this.index];
     const wp = s.wp[this.index];
     const alive = !!mine && (mine[6] & 1) !== 0 && !s.ov;
+    const downed = !!mine && !alive && (mine[6] & 16) !== 0 && !s.ov;
+    p.downed = downed;
     const colliders = this.stage.map.colliders;
 
     const look = this.input.consumeLook();
-    if (alive) p.look(look.x, look.y, this.input.sensitivity);
-    if (!s.ov) p.update(dt, this.input, colliders);
+    if ((alive || downed) && !this.paused) p.look(look.x, look.y, this.input.sensitivity);
+    if (!s.ov && !this.paused) p.update(dt, this.input, colliders);
     p.onStep = (running) => this.audio.step(running);
     const ready = !!wp && wp[6] === 0;
-    this.ads = damp(this.ads, alive && this.input.mouseRight && ready ? 1 : 0, 10, dt);
+    this.ads = damp(this.ads, (alive || downed) && !this.paused && this.input.mouseRight && ready ? 1 : 0, 10, dt);
     // Teclas: cada una es una acción para el anfitrión.
     const wanted = this.input.take("Digit1") ? 0 : this.input.take("Digit2") ? 1 : this.input.take("Digit3") ? 2 : -1;
-    if (alive && wanted >= 0) this.send(4, wanted);
-    if (this.input.take("KeyR") && alive) this.send(2);
+    const go = alive && !this.paused;
+    const shoot = (alive || downed) && !this.paused;
+    if (go && wanted >= 0) this.send(4, wanted);
+    if (this.input.take("KeyR") && shoot) this.send(2);
     if (this.input.take("KeyF")) {
       this.flashOn = !this.flashOn;
       this.stage.setFlashlight(this.flashOn);
       this.audio.swap();
     }
-    if (this.input.take("KeyE") && alive) this.send(3);
-    if (this.input.take("KeyV") && alive) this.send(6);
-    if (this.input.takeClick() && alive) this.send(1);
+    if (this.input.take("KeyE") && go) this.send(3);
+    if ((this.input.take("KeyV") || this.input.take("KeyQ")) && go) this.send(6);
+    if (this.input.takeClick() && shoot) this.send(1);
     this.input.clear();
 
     // Zombis, puertas, ventanas y caja según el anfitrión.
@@ -1437,7 +1610,7 @@ export class DeadZoneGuest implements GuestGame {
     else this.stage.view.setWeapon(wid, wupg);
     const move = clamp(Math.hypot(p.velocity.x, p.velocity.z) / PLAYER.sprint, 0, 1);
     this.stage.updateCamera(
-      { x: p.position.x, eyeY: p.eyeY, z: p.position.z, yaw: p.yaw, pitch: p.pitch, lean: p.lean, shake: p.shake, sprinting: p.sprinting, ads: this.ads > 0.5, adsFov: wid ? SIGHTS[wid].fov : undefined, alive, moving: alive ? move : 0 },
+      { x: p.position.x, eyeY: p.eyeY, z: p.position.z, yaw: p.yaw, pitch: p.pitch, lean: p.lean, shake: p.shake, sprinting: p.sprinting, ads: this.ads > 0.5, adsFov: wid ? SIGHTS[wid].fov : undefined, alive: alive || downed, moving: alive || downed ? move : 0, spec: this.specView() ?? undefined },
       dt,
     );
     const post = this.stage.post;
@@ -1451,7 +1624,7 @@ export class DeadZoneGuest implements GuestGame {
       sprinting: p.sprinting,
       ads: this.ads > 0.5,
       reloading: !!wp && wp[6] === 1,
-      hidden: !alive,
+      hidden: !(alive || downed),
     });
     for (let i = 0; i < MAX_PLAYERS; i++) {
       const av = this.stage.avatar(i);
@@ -1536,6 +1709,7 @@ export class DeadZoneGuest implements GuestGame {
     const wp = s.wp[this.index] ?? [-1, -1, -1, 0, 0, 0, 0, 0];
     const wid = weaponAt(wp[wp[3]] ?? -1);
     const alive = !!mine && (mine[6] & 1) !== 0;
+    const downed = !!mine && !alive && (mine[6] & 16) !== 0 && !s.ov;
     const rd = s.rd;
     const pr = s.pr?.[this.index] ?? null;
     return {
@@ -1548,9 +1722,9 @@ export class DeadZoneGuest implements GuestGame {
       special: rd[5] === 1,
       weaponName: wid ? weaponDef(wid, ((wp[8] ?? 0) & (1 << wp[3])) !== 0).name : "SIN ARMA",
       upgraded: ((wp[8] ?? 0) & (1 << wp[3])) !== 0 && !!wid,
-      slotUpg: [0, 1, 2].map((k) => ((wp[8] ?? 0) & (1 << k)) !== 0),
+      slotUpg: [0, 1].map((k) => ((wp[8] ?? 0) & (1 << k)) !== 0),
       power: s.pu?.[0] === 1,
-      slots: [wp[0], wp[1], wp[2]].map((k, ix) => { const id = weaponAt(k); return id ? weaponDef(id, ((wp[8] ?? 0) & (1 << ix)) !== 0).name.split(" ")[0].replace("«", "") : null; }),
+      slots: [wp[0], wp[1]].map((k, ix) => { const id = weaponAt(k); return id ? weaponDef(id, ((wp[8] ?? 0) & (1 << ix)) !== 0).name.split(" ")[0].replace("«", "") : null; }),
       activeSlot: wp[3],
       mag: wp[4],
       reserve: wp[5],
@@ -1577,6 +1751,10 @@ export class DeadZoneGuest implements GuestGame {
         .filter(({ i }) => s.on[i] === 1)
         .map(({ row, i }) => ({ name: PLAYER_NAMES[i] ?? `J${i + 1}`, color: PLAYER_COLORS[i] ?? PLAYER_COLORS[0], health: row[5], alive: (row[6] & 1) !== 0, points: s.pt[i] ?? 0, me: i === this.index })),
       alive: alive && !s.ov,
+      downed,
+      pause: this.paused ? { index: this.pauseIndex, items: this.pauseItems(), coop: true, round: Math.max(1, rd[0]), points: s.pt[this.index] ?? 0 } : null,
+      roundFx: this.fb.roundFx,
+      spec: this.specIndex() >= 0 ? (PLAYER_NAMES[this.specIndex()] ?? `J${this.specIndex() + 1}`) : null,
       over: s.ov ? { round: s.ov[0], points: s.ov[1], kills: s.ov[2] } : null,
       netLabel: this.netLabel,
       look: lookMode(),
@@ -1604,7 +1782,7 @@ export class DeadZoneGuest implements GuestGame {
       s.pl
         .map((row, i) => ({ row, i }))
         .filter(({ i }) => i !== this.index && s.on[i] === 1)
-        .map(({ row, i }) => ({ name: PLAYER_NAMES[i] ?? `J${i + 1}`, x: row[0], y: row[1], z: row[2], alive: (row[6] & 1) !== 0, color: PLAYER_COLORS[i] ?? PLAYER_COLORS[0] })),
+        .map(({ row, i }) => ({ name: PLAYER_NAMES[i] ?? `J${i + 1}`, x: row[0], y: row[1], z: row[2], alive: (row[6] & 1) !== 0, color: PLAYER_COLORS[i] ?? PLAYER_COLORS[0], tag: (s.dn?.[i]?.[0] ?? 0) > 0 && (row[6] & 1) === 0 ? `${Math.ceil(s.dn![i][0])}S` : undefined })),
     );
     drawHud(ctx, this.hudView());
   }

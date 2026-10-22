@@ -51,7 +51,7 @@ export function bloodTexture(variant: number): THREE.CanvasTexture {
     const core = 30 + r() * 24;
     // Charco: varios óvalos superpuestos.
     for (let i = 0; i < 7; i++) {
-      g.fillStyle = `rgba(${70 + r() * 30},4,6,${0.55 + r() * 0.3})`;
+      g.fillStyle = `rgba(${150 + r() * 50},8,12,${0.8 + r() * 0.2})`;
       g.beginPath();
       g.ellipse((r() - 0.5) * 34, (r() - 0.5) * 34, core * (0.5 + r() * 0.6), core * (0.4 + r() * 0.6), r() * 3, 0, Math.PI * 2);
       g.fill();
@@ -65,13 +65,13 @@ export function bloodTexture(variant: number): THREE.CanvasTexture {
       for (let k = 0; k < n; k++) {
         const d = core * 0.8 + (len * (k + r() * 0.6)) / n;
         const rad = Math.max(1.2, (1 - k / n) * (2 + r() * 5));
-        g.fillStyle = `rgba(${80 + r() * 40},5,8,${0.6 + r() * 0.35})`;
+        g.fillStyle = `rgba(${160 + r() * 50},10,14,${0.8 + r() * 0.2})`;
         g.beginPath();
         g.arc(Math.cos(a) * d, Math.sin(a) * d, rad, 0, Math.PI * 2);
         g.fill();
       }
       // Estela entre el charco y la primera gota.
-      g.strokeStyle = "rgba(70,4,6,0.55)";
+      g.strokeStyle = "rgba(140,8,12,0.75)";
       g.lineWidth = 1.5 + r() * 2.5;
       g.beginPath();
       g.moveTo(Math.cos(a) * core * 0.6, Math.sin(a) * core * 0.6);
@@ -79,7 +79,7 @@ export function bloodTexture(variant: number): THREE.CanvasTexture {
       g.stroke();
     }
     // Brillo húmedo.
-    g.fillStyle = "rgba(255,120,110,0.22)";
+    g.fillStyle = "rgba(255,150,140,0.38)";
     for (let i = 0; i < 6; i++) {
       g.beginPath();
       g.ellipse((r() - 0.5) * core, (r() - 0.5) * core, 3 + r() * 6, 2 + r() * 3, r() * 3, 0, Math.PI * 2);
@@ -270,7 +270,7 @@ export class DecalPool {
   private holeNext = 0;
   private static readonly HOLES = 90;
 
-  constructor(scene: THREE.Object3D, private readonly perVariant = 36, variants = 4) {
+  constructor(scene: THREE.Object3D, private readonly perVariant = 72, variants = 4) {
     const geo = new THREE.PlaneGeometry(1, 1);
     for (let v = 0; v < variants; v++) {
       const mat = new THREE.MeshStandardMaterial({

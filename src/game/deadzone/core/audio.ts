@@ -46,7 +46,7 @@ export class AudioSystem {
     return this.ctx ? this.ctx.currentTime : 0;
   }
 
-  private noise(dur: number, gain: number, filterType: BiquadFilterType, freq: number, q = 1): void {
+  private noise(dur: number, gain: number, filterType: BiquadFilterType, freq: number, q = 1, delay = 0): void {
     if (!this.ctx || !this.master || this.muted) return;
     const src = this.ctx.createBufferSource();
     src.buffer = this.noiseBuffer;
@@ -56,7 +56,7 @@ export class AudioSystem {
     filter.frequency.value = freq;
     filter.Q.value = q;
     const g = this.ctx.createGain();
-    const now = this.t;
+    const now = this.t + delay;
     g.gain.setValueAtTime(0.0001, now);
     g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), now + 0.004);
     g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
@@ -180,14 +180,57 @@ export class AudioSystem {
     this.noise(0.2, 0.18, "lowpass", 900);
   }
 
-  roundStart(): void {
-    this.tone(220, 0.5, 0.16, "sine", 440);
-    this.tone(330, 0.6, 0.12, "triangle", 660, 0.18);
+  /** Nota larga con ataque lento (colchón de sintetizador para los toques de ronda). */
+  private pad(freq: number, dur: number, gain: number, type: OscillatorType, delay = 0, attack = 0.3, detune = 0, freqEnd?: number): void {
+    if (!this.ctx || !this.master || this.muted) return;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    const now = this.t + delay;
+    osc.type = type;
+    osc.detune.value = detune;
+    osc.frequency.setValueAtTime(freq, now);
+    if (freqEnd !== undefined) osc.frequency.exponentialRampToValueAtTime(Math.max(20, freqEnd), now + dur);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), now + Math.min(attack, dur * 0.8));
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    osc.connect(g).connect(this.master);
+    osc.start(now);
+    osc.stop(now + dur + 0.03);
   }
 
+  /** Empieza la ronda: zumbido grave que crece, segunda menor disonante, barrido de ruido y un golpe sordo con latido. */
+  roundStart(special = false): void {
+    this.pad(55, 3.4, 0.2, "sawtooth", 0, 1.5);
+    this.pad(82.4, 3.4, 0.12, "sawtooth", 0, 1.5, 7);
+    this.pad(220, 3.0, 0.08, "triangle", 0.2, 1.3);
+    this.pad(233.1, 3.0, 0.07, "triangle", 0.2, 1.3, -5);
+    this.pad(311, 2.8, 0.05, "triangle", 0.5, 1.1);
+    this.noise(1.5, 0.28, "bandpass", 1400, 1.4, 0);
+    this.tone(70, 0.6, 0.45, "sine", 30, 1.45);
+    this.noise(0.4, 0.5, "lowpass", 700, 1, 1.45);
+    this.tone(64, 0.35, 0.3, "sine", 30, 1.9);
+    this.tone(64, 0.35, 0.25, "sine", 30, 2.15);
+    if (special) {
+      this.tone(160, 1.8, 0.16, "sawtooth", 60, 0.5);
+      this.pad(880, 2.2, 0.05, "sine", 0.9, 0.8, 0, 420);
+      this.noise(2, 0.4, "lowpass", 1800, 0.8, 0.2);
+    }
+  }
+
+  /** Acaba la ronda: motivo descendente en menor con órgano y campana lejana, trueno y zumbido que se apaga. */
   roundEnd(): void {
-    this.tone(440, 0.4, 0.14, "sine", 220);
-    this.tone(220, 0.7, 0.12, "triangle", 110, 0.2);
+    [330, 293.7, 246.9, 220, 196].forEach((f, i) => {
+      this.pad(f, 1.5, 0.11, "triangle", i * 0.48, 0.06);
+      this.pad(f / 2, 1.5, 0.08, "square", i * 0.48, 0.08, 4);
+    });
+    this.pad(1318.5, 2.6, 0.04, "sine", 0.2, 0.02);
+    this.pad(98, 3.6, 0.1, "sawtooth", 2.0, 0.8);
+    this.noise(2.6, 0.22, "lowpass", 320, 1, 0.1);
+  }
+
+  /** Pausa: golpe seco al abrir y al cerrar el menú. */
+  pause(on: boolean): void {
+    this.tone(on ? 330 : 440, 0.12, 0.12, "square", on ? 220 : 660);
   }
 
   buy(): void {

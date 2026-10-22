@@ -45,6 +45,8 @@ export interface CamState {
   shake: number;
   sprinting: boolean;
   ads: boolean;
+  /** Muerto: ve por los ojos de un compañero vivo. */
+  spec?: { x: number; eyeY: number; z: number; yaw: number; pitch: number };
   /** Campo de visión al apuntar con el arma de la mano (por defecto `ADS_FOV`). */
   adsFov?: number;
   alive: boolean;
@@ -162,6 +164,7 @@ export class DzStage {
       : null;
     this.zombies = new ZombieManager(this.scene, this.nav);
     this.effects = new Effects(this.scene);
+    this.effects.setWorld(this.map.colliders);
     this.scene.add(this.powerDrops.group);
     this.zombies.onDie = (z) => this.effects.corpseBlood(z.position.x, z.position.z);
     for (let i = 0; i < 4; i++) {
@@ -187,6 +190,15 @@ export class DzStage {
   /** Cámara en los ojos del jugador propio (con sacudida al recibir daño y zoom al apuntar). */
   updateCamera(s: CamState, dt: number): void {
     const cam = this.camera;
+    if (s.spec) {
+      cam.position.set(s.spec.x, s.spec.eyeY, s.spec.z);
+      cam.rotation.set(s.spec.pitch, s.spec.yaw, 0);
+      if (Math.abs(cam.fov - BASE_FOV) > 0.05) {
+        cam.fov = damp(cam.fov, BASE_FOV, 9, dt);
+        cam.updateProjectionMatrix();
+      }
+      return;
+    }
     const moving = s.moving ?? 0;
     this.bob += dt * (s.sprinting ? 12 : 8) * (moving > 0.05 ? 1 : 0);
     const bobY = Math.sin(this.bob) * 0.028 * moving;
@@ -233,6 +245,7 @@ export class DzStage {
       if (Math.random() < dt * 1.6) this.effects.smoke(f.x, f.y + 0.4, f.z);
     }
     this.effects.update(dt);
+    this.zombies.updateShadows(cam, 16);
     this.post.time = this.time;
     this.post.flash = flash;
   }

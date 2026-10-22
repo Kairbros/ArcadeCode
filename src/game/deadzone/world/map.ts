@@ -975,6 +975,11 @@ export function buildMap(scene: THREE.Scene, def: MapDef): BuiltMap {
 
   // Fusión de la geometría estática: una malla por material.
   batchStatic(root, (m) => m.userData.tile as number | undefined);
+  // Lo del escenario no se mueve: sin recalcular matrices cada fotograma (cientos de mallas).
+  root.updateMatrixWorld(true);
+  root.traverse((o) => {
+    o.matrixAutoUpdate = false;
+  });
 
   return {
     root,

@@ -78,6 +78,10 @@ export class Zombie {
   private fallDir = 1;
   /** Cabeza reventada por un disparo. */
   headless = false;
+  /** Heridas recibidas: el cuerpo se tiñe de rojo (hasta 8) y solo proyecta sombra si está cerca de la cámara. */
+  wounds = 0;
+  private readonly shadowMeshes: THREE.Mesh[] = [];
+  private shadowOn = true;
   /** Aviso al empezar a morir (sangre en el suelo): lo pone el gestor. */
   onDie?: (z: Zombie) => void;
   private diedAnnounced = false;
@@ -131,6 +135,7 @@ export class Zombie {
     const mesh = (geo: THREE.BufferGeometry, mat: THREE.Material = this.bodyMat) => {
       const m = new THREE.Mesh(geo, mat);
       m.castShadow = true;
+      this.shadowMeshes.push(m);
       return m;
     };
     const torso = mesh(rig.torso);
@@ -183,6 +188,20 @@ export class Zombie {
     this.group.position.set(this.position.x, 0, this.position.z);
   }
 
+  /** Una herida más: el cuerpo se va tiñendo de rojo. */
+  stain(): void {
+    this.wounds = Math.min(8, this.wounds + 1);
+    const k = this.wounds / 8;
+    this.bodyMat.color.setRGB(1, 1 - k * 0.55, 1 - k * 0.6);
+  }
+
+  /** Proyecta sombra o no (los zombis lejanos no gastan en el pase de sombras). */
+  setShadow(on: boolean): void {
+    if (on === this.shadowOn) return;
+    this.shadowOn = on;
+    for (const m of this.shadowMeshes) m.castShadow = on;
+  }
+
   /** Golpe de cuchillo: lo empuja un poco hacia `dir` y lo aturde un instante. */
   knock(dirX: number, dirZ: number, push = 0.45, stun = 0.7): void {
     if (!this.alive) return;
@@ -213,6 +232,7 @@ export class Zombie {
   hit(damage: number, headshot: boolean): boolean {
     if (!this.alive) return false;
     this.hp -= damage;
+    this.stain();
     this.hurtFlash = 0.12;
     this.stagger = headshot ? 0.26 : 0.16;
     if (this.hp <= 0) {

@@ -4,7 +4,7 @@
 import type { Keyboard } from "../../core/keyboard";
 
 /** Teclas de un solo uso que se cuentan (flanco de bajada). */
-const TAPS = ["KeyE", "KeyR", "KeyF", "KeyV", "KeyN", "Digit1", "Digit2", "Digit3", "Digit4", "ArrowLeft", "ArrowRight", "KeyA", "KeyD", "Enter", "Space"] as const;
+const TAPS = ["KeyE", "KeyR", "KeyF", "KeyV", "KeyQ", "KeyP", "ArrowUp", "ArrowDown", "KeyW", "KeyS", "KeyN", "Digit1", "Digit2", "Digit3", "Digit4", "ArrowLeft", "ArrowRight", "KeyA", "KeyD", "Enter", "Space"] as const;
 export type Tap = (typeof TAPS)[number];
 
 const mouse = {

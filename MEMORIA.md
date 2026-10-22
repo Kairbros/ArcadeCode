@@ -507,6 +507,21 @@ Portado desde la carpeta hermana `DeadZoneOutbreak` (FPS de un jugador con Vite,
   muros finos, partida quieta que acaba con zombis dentro haciendo daño y ruta por la ventana abierta). Capturas:
   `npm run shot -- test/browser/deadzone.mjs` (las tres últimas son ya una ronda de verdad: llegan, entran y cruzan).
 
+## 6o. Dead Zone: dos armas, abatido que dispara, pausa, cuchillo con botón y rondas al estilo CoD (2026-10-22)
+
+- **Dos armas** (`MAX_SLOTS = 2`): una tercera sustituye a la de la mano (como en BO2). El estado de red mantiene la forma de 3 ranuras (la tercera siempre −1).
+- **Cuchillo**: **V o Q** en cualquier momento (no solo sin balas); el HUD lo recuerda con «V · CUCHILLO» sobre el cargador.
+- **Abatido como en CoD**: `Player.downed` (vida 0 pero vivo para revivir): se arrastra a 1 m/s con la vista a ras de suelo y **sigue disparando con la pistola**
+  (`WeaponSystem.enterSidearm/leaveSidearm`: cargador lleno y 24 de reserva; al levantarlo recupera sus armas y la munición que tenía). No usa, no compra ni acuchilla.
+  Quien lo revive mantiene E; si se desangra muere y, con un compañero vivo, **reaparece al acabar la ronda**. Red: bit 16 en `pl[6]`. Los compañeros ven
+  «NOMBRE · ABATIDO 23S» sobre el cuerpo. Los muertos miran por los ojos de un compañero vivo (`CamState.spec`).
+- **Pausa**: P o Esc. Menú: continuar, reiniciar, cambiar de mapa, sonido y salir al menú (`arcade-quit` lo recoge `main.ts`). En solitario congela la partida; con
+  compañeros sigue en segundo plano (y el menú lo avisa). El invitado tiene su propio menú (continuar, sonido, salir).
+- **Cambio de ronda**: `fb.roundFx` (`hud.ts` `drawRoundFx`/`bloodTally`): al acabar, las marcas de la ronda superada grandes y pálidas; al empezar, la marca nueva se pinta
+  con sangre (grupos de cinco con tachón, trazos irregulares y chorretones), se queda grande y baja a la esquina inferior izquierda, que es el recuento permanente. La
+  música es original y sintetizada (`audio.roundStart/roundEnd`): zumbido grave, segunda menor disonante, barrido de ruido, golpe y latido; y motivo descendente con órgano y trueno al acabar.
+- **Pruebas**: `test/deadzone-coop.test.ts`; capturas: `npm run shot -- test/browser/deadzone-rondas.mjs`.
+
 ## 6n. Dead Zone: cuatro mapas, selector, tablones al estilo CoD y armas más reales (2026-10-21)
 
 Petición del usuario: mejorar el mapa o, mejor, hacer los mapas principales de Call of Duty (la granja y el pueblo), armas más reales,

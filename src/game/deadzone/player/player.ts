@@ -32,6 +32,8 @@ export class Player {
   crouching = false;
   sprinting = false;
   health: number = PLAYER.maxHealth;
+  /** Abatido: en el suelo, arrastrándose despacio y con la pistola (la vida es 0 pero aún puede revivir). */
+  downed = false;
   /** Vida máxima (Juggernog la sube). */
   maxHealth: number = PLAYER.maxHealth;
   /** Distancia recorrida acumulada (vaivén de cámara). */
@@ -51,6 +53,7 @@ export class Player {
     this.yaw = yaw;
     this.pitch = 0;
     this.health = this.maxHealth;
+    this.downed = false;
     this.onGround = true;
     this.crouching = false;
     this.sprinting = false;
@@ -61,11 +64,11 @@ export class Player {
   }
 
   get height(): number {
-    return this.crouching ? PLAYER.crouchHeight : PLAYER.height;
+    return this.downed ? 0.7 : this.crouching ? PLAYER.crouchHeight : PLAYER.height;
   }
 
   get eyeY(): number {
-    const base = this.crouching ? PLAYER.crouchEye : PLAYER.eye;
+    const base = this.downed ? 0.5 : this.crouching ? PLAYER.crouchEye : PLAYER.eye;
     return this.position.y + base + Math.sin(this.travel * 2.1) * 0.045 * this.bobAmp;
   }
 
@@ -90,18 +93,18 @@ export class Player {
   }
 
   update(dt: number, input: Input, colliders: readonly Collider[]): void {
-    if (!this.alive) {
+    if (!this.alive && !this.downed) {
       // Cuerpo en el suelo: solo cae.
       this.velocity.y -= PLAYER.gravity * dt;
       this.position.y = Math.max(0, this.position.y + this.velocity.y * dt);
       return;
     }
     const axis = input.moveAxis();
-    this.crouching = input.isDown("ControlLeft") || input.isDown("KeyC");
+    this.crouching = !this.downed && (input.isDown("ControlLeft") || input.isDown("KeyC"));
     const forwardish = axis.z > 0.1;
-    this.sprinting = input.isDown("ShiftLeft") && forwardish && !this.crouching;
+    this.sprinting = !this.downed && input.isDown("ShiftLeft") && forwardish && !this.crouching;
 
-    const speed = this.crouching ? PLAYER.crouchSpeed : this.sprinting ? PLAYER.sprint : PLAYER.walk;
+    const speed = this.downed ? 1.0 : this.crouching ? PLAYER.crouchSpeed : this.sprinting ? PLAYER.sprint : PLAYER.walk;
     const sin = Math.sin(this.yaw);
     const cos = Math.cos(this.yaw);
     // Adelante es (−sin, −cos); derecha es (cos, −sin).
@@ -112,7 +115,7 @@ export class Player {
     this.velocity.z = damp(this.velocity.z, wantZ, accel, dt);
 
     // Salto con margen de suelo (coyote time corto).
-    if (input.isDown("Space") && this.onGround) {
+    if (input.isDown("Space") && this.onGround && !this.downed) {
       this.velocity.y = PLAYER.jump;
       this.onGround = false;
     }

@@ -86,6 +86,14 @@ export interface DzHudView {
   noAmmo: boolean;
   team: HudTeammate[];
   alive: boolean;
+  /** Abatido: en el suelo y con la pistola hasta que lo revivan. */
+  downed: boolean;
+  /** Menú de pausa abierto (índice marcado y opciones), o null. */
+  pause: { index: number; items: string[]; coop: boolean; round: number; points: number } | null;
+  /** Cambio de ronda: marcas de sangre grandes que entran, se pintan y bajan a la esquina. */
+  roundFx: { kind: "start" | "end"; num: number; t: number; special: boolean } | null;
+  /** Muerto: nombre del compañero al que se mira. */
+  spec: string | null;
   /** Fin de la partida con sus cifras, o null. */
   over: { round: number; points: number; kills: number } | null;
   netLabel: string;
@@ -107,22 +115,25 @@ export function drawHud(ctx: Ctx, v: DzHudView): void {
   }
   drawNuke(ctx, v);
   drawScope(ctx, v);
-  if (v.alive && v.scope < 0.5) drawCrosshair(ctx, v);
+  if ((v.alive || v.downed) && v.scope < 0.5) drawCrosshair(ctx, v);
   drawTop(ctx, v);
   drawTeam(ctx, v);
   drawBottom(ctx, v);
+  drawCornerTally(ctx, v);
   drawPerks(ctx, v);
   drawPrompt(ctx, v);
   drawEffects(ctx, v);
   drawToasts(ctx, v);
+  drawRoundFx(ctx, v);
   if (v.banner && v.banner.t > 0) drawBanner(ctx, v.banner);
   if (!v.alive && !v.over) drawDown(ctx, v);
   if (v.over) drawOver(ctx, v);
   if (v.look !== "locked" && v.alive && !v.over) {
     text(ctx, v.look === "drag" ? "MIRA ARRASTRANDO CON EL RATÓN" : "CLIC PARA CAPTURAR EL RATÓN", VW / 2, 52, C_YELLOW, TINY, "center");
   }
-  text(ctx, "ESC MENÚ · E USAR · R RECARGAR · V CUCHILLO · F LINTERNA · M SONIDO", VW / 2, VH - 7, C_DIM, TINY, "center");
+  text(ctx, "ESC PAUSA · E USAR · R RECARGAR · V O Q CUCHILLO · F LINTERNA · M SONIDO", VW / 2, VH - 7, C_DIM, TINY, "center");
   if (v.netLabel) text(ctx, v.netLabel, VW - 4, 3, C_DIM, TINY, "right");
+  if (v.pause) drawPause(ctx, v);
 }
 
 /** Mira telescópica: todo negro salvo un círculo, con retícula fina, marcas de distancia y borde. */
@@ -260,33 +271,8 @@ function drawCrosshair(ctx: Ctx, v: DzHudView): void {
   }
 }
 
-/** Marcas de recuento de la ronda, como rayas de tiza (grupos de cinco tachados). */
-function drawTally(ctx: Ctx, round: number, x: number, y: number): void {
-  ctx.strokeStyle = "rgba(214,60,50,0.9)";
-  ctx.lineWidth = 1;
-  const groups = Math.min(4, Math.floor(round / 5));
-  const rest = round % 5;
-  let cx = x;
-  const stick = (px: number) => {
-    ctx.beginPath();
-    ctx.moveTo(px, y);
-    ctx.lineTo(px, y + 8);
-    ctx.stroke();
-  };
-  for (let g = 0; g < groups; g++) {
-    for (let i = 0; i < 4; i++) stick(cx + i * 2);
-    ctx.beginPath();
-    ctx.moveTo(cx - 2, y + 7);
-    ctx.lineTo(cx + 9, y + 1);
-    ctx.stroke();
-    cx += 14;
-  }
-  for (let i = 0; i < rest; i++) stick(cx + i * 2);
-}
-
 function drawTop(ctx: Ctx, v: DzHudView): void {
   shadowText(ctx, `RONDA ${v.round}`, 5, 4, C_ORANGE, MID);
-  if (v.round <= 24) drawTally(ctx, v.round, 66, 5);
   const zl = v.roundState === 1 ? "DESCANSO" : v.special ? `PERROS ${v.remaining}` : `ZOMBIS ${v.remaining}`;
   shadowText(ctx, zl, 5, 14, v.roundState === 1 ? C_GREEN : v.special ? C_RED : C_TEXT, SMALL);
   shadowText(ctx, `${v.points}`, VW - 5, 4, C_YELLOW, MID, "right");
@@ -329,6 +315,7 @@ function drawBottom(ctx: Ctx, v: DzHudView): void {
   const ax = VW - w - 5;
   roundRect(ctx, ax, y - 11, w, 28, 3, C_PANEL, C_LINE, 1);
   text(ctx, fitText(ctx, v.weaponName, w - 8, TINY), ax + 4, y - 8, v.upgraded ? C_UPG : C_DIM, TINY);
+  text(ctx, "V · CUCHILLO", ax + 4, y - 20, v.noAmmo ? C_YELLOW : C_DIM, TINY);
   const low = v.mag <= 3;
   if (v.fx[2] > 0) {
     shadowText(ctx, "INF", ax + 4, y + 1, C_UPG, BIG);
@@ -441,12 +428,28 @@ function drawToasts(ctx: Ctx, v: DzHudView): void {
 function drawBanner(ctx: Ctx, b: { num: number; sub: string; t: number }): void {
   const a = Math.min(1, b.t * 1.5);
   ctx.globalAlpha = a;
-  shadowText(ctx, `RONDA ${b.num}`, VW / 2, 74, C_RED, "16px", "center");
-  shadowText(ctx, b.sub, VW / 2, 94, C_TEXT, SMALL, "center");
+  shadowText(ctx, b.sub, VW / 2, 100, b.num > 0 ? C_TEXT : C_TEXT, SMALL, "center");
   ctx.globalAlpha = 1;
 }
 
 function drawDown(ctx: Ctx, v: DzHudView): void {
+  if (v.downed) {
+    // Abatido pero vivo: velo rojo que late, cuenta atrás y a seguir disparando con la pistola.
+    ctx.fillStyle = `rgba(120,0,0,${(0.16 + Math.sin(v.time * 5) * 0.06).toFixed(3)})`;
+    ctx.fillRect(0, 0, VW, VH);
+    shadowText(ctx, "ABATIDO", VW / 2, 18, C_RED, BIG, "center");
+    const d = v.down;
+    if (d) {
+      const line = d.self ? `QUICK REVIVE: TE LEVANTAS EN ${Math.ceil(d.t)} S` : `TE DESANGRAS EN ${Math.ceil(d.t)} S`;
+      text(ctx, line, VW / 2, 36, d.self ? C_UPG : C_YELLOW, SMALL, "center");
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(VW / 2 - 40, 47, 80, 5);
+      ctx.fillStyle = d.prog > 0.01 ? "rgb(92,226,140)" : "rgb(255,90,74)";
+      ctx.fillRect(VW / 2 - 40, 47, Math.round(80 * (d.prog > 0.01 ? d.prog : Math.max(0, Math.min(1, d.t / 30)))), 5);
+      text(ctx, d.prog > 0.01 && !d.self ? "TE ESTÁN REVIVIENDO…" : d.self ? "DISPARA CON LA PISTOLA" : "ARRÁSTRATE Y DISPARA · UN COMPAÑERO PUEDE REVIVIRTE (E)", VW / 2, 56, d.prog > 0.01 ? C_GREEN : C_DIM, TINY, "center");
+    }
+    return;
+  }
   ctx.fillStyle = "rgba(40,0,0,0.35)";
   ctx.fillRect(0, 0, VW, VH);
   shadowText(ctx, "ABATIDO", VW / 2, 82, C_RED, "16px", "center");
@@ -464,7 +467,134 @@ function drawDown(ctx: Ctx, v: DzHudView): void {
   } else {
     text(ctx, "TUS COMPAÑEROS SIGUEN VIVOS", VW / 2, 114, C_TEXT, SMALL, "center");
     text(ctx, "REAPARECES AL EMPEZAR LA SIGUIENTE RONDA", VW / 2, 124, C_DIM, TINY, "center");
+    if (v.spec) text(ctx, `VIENDO A ${v.spec}`, VW / 2, 136, C_YELLOW, TINY, "center");
   }
+}
+
+// --- Cambio de ronda al estilo Call of Duty: marcas de sangre ---------------------------------------------------
+const easeIn = (k: number): number => {
+  const c = Math.max(0, Math.min(1, k));
+  return c * c * (3 - 2 * c);
+};
+
+/** Ancho (px) de un recuento con `count` marcas a la escala dada. */
+function tallyWidth(count: number, scale: number): number {
+  const sp = 3.2 * scale;
+  const gap = 7 * scale;
+  let w = 0;
+  for (let g = 0; g < Math.ceil(count / 5); g++) {
+    const m = Math.min(5, count - g * 5);
+    w += (m >= 5 ? 3 : Math.max(0, m - 1)) * sp + (g ? gap : 0);
+  }
+  return w;
+}
+
+/**
+ * Recuento de rondas como las marcas de un preso (grupos de cinco con tachón), pintadas con sangre: trazos irregulares, brillo y
+ * chorretones. `progress` anima la última marca (0 sin pintar, 1 completa). Pasadas 25 rondas se escribe el número.
+ */
+function bloodTally(ctx: Ctx, count: number, x: number, y: number, scale: number, color: string, alpha: number, time: number, progress = 1): void {
+  if (count <= 0 || alpha <= 0) return;
+  if (count > 25) {
+    ctx.globalAlpha = alpha;
+    shadowText(ctx, String(count), x, y, [190, 24, 24], scale > 2 ? "16px" : BIG);
+    ctx.globalAlpha = 1;
+    return;
+  }
+  const sp = 3.2 * scale;
+  const h = 15 * scale;
+  const gap = 7 * scale;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = Math.max(1, 1.15 * scale);
+  ctx.shadowColor = "rgba(180,10,10,0.85)";
+  ctx.shadowBlur = 3 * scale;
+  let gx = x;
+  for (let g = 0; g < Math.ceil(count / 5); g++) {
+    const marks = Math.min(5, count - g * 5);
+    for (let k = 0; k < marks; k++) {
+      const i = g * 5 + k;
+      const p = i === count - 1 ? progress : 1;
+      if (p <= 0) continue;
+      const wob = Math.sin(i * 12.9) * 0.45 * scale;
+      if (k < 4) {
+        const sx = gx + k * sp + wob;
+        ctx.beginPath();
+        ctx.moveTo(sx, y);
+        ctx.lineTo(sx + wob * 0.6, y + h * p);
+        ctx.stroke();
+        // Chorretón que baja desde el pie de la marca.
+        if (scale > 1.2 && p >= 1) {
+          const len = h * (0.12 + ((i * 37) % 10) / 40) * (0.55 + 0.45 * Math.sin(time * 0.7 + i));
+          ctx.fillRect(sx - 0.4 * scale * 0.5, y + h, Math.max(1, 0.55 * scale), len);
+        }
+      } else {
+        // El tachón cruza las cuatro marcas en diagonal.
+        const x0 = gx - 0.5 * sp;
+        const y0 = y + h * 0.82;
+        const x1 = gx + 3.5 * sp;
+        const y1 = y + h * 0.16;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x0 + (x1 - x0) * p, y0 + (y1 - y0) * p);
+        ctx.stroke();
+      }
+    }
+    gx += (marks >= 5 ? 3 : Math.max(0, marks - 1)) * sp + gap;
+  }
+  ctx.restore();
+}
+
+/** Recuento permanente en la esquina inferior izquierda. */
+function drawCornerTally(ctx: Ctx, v: DzHudView): void {
+  if (v.roundFx && v.roundFx.kind === "start" && v.roundFx.t < 4.9) return;
+  bloodTally(ctx, v.round, 7, VH - 66, 1.5, "rgb(176,22,22)", 0.92, v.time);
+}
+
+/** La ronda termina (marcas pálidas) y empieza otra (marca nueva pintada con sangre que baja a la esquina). */
+function drawRoundFx(ctx: Ctx, v: DzHudView): void {
+  const f = v.roundFx;
+  if (!f) return;
+  const t = f.t;
+  if (f.kind === "end") {
+    const a = Math.min(1, t / 0.5) * Math.min(1, Math.max(0, (5.2 - t) / 0.8));
+    if (a <= 0) return;
+    ctx.fillStyle = `rgba(0,0,0,${(0.4 * a).toFixed(3)})`;
+    ctx.fillRect(0, 0, VW, VH);
+    const w = tallyWidth(f.num, 3.2);
+    bloodTally(ctx, f.num, VW / 2 - w / 2, 46, 3.2, "rgb(232,224,214)", a, v.time);
+    return;
+  }
+  if (t > 5) return;
+  const move = easeIn((t - 3.4) / 1.5);
+  const sc = 3.6 * (1 - move) + 1.5 * move;
+  const w0 = tallyWidth(f.num, sc);
+  const x = (VW / 2 - tallyWidth(f.num, 3.6) / 2) * (1 - move) + 7 * move;
+  const y = 44 * (1 - move) + (VH - 66) * move;
+  ctx.fillStyle = `rgba(60,0,0,${(0.42 * (1 - move) * Math.min(1, t / 0.4)).toFixed(3)})`;
+  ctx.fillRect(0, 0, VW, VH);
+  void w0;
+  bloodTally(ctx, f.num, x, y, sc, f.special ? "rgb(214,76,20)" : "rgb(190,20,20)", Math.min(1, t / 0.4), v.time, Math.min(1, Math.max(0.02, (t - 0.5) / 1.5)));
+}
+
+/** Menú de pausa. */
+function drawPause(ctx: Ctx, v: DzHudView): void {
+  const p = v.pause!;
+  ctx.fillStyle = "rgba(4,6,10,0.78)";
+  ctx.fillRect(0, 0, VW, VH);
+  shadowText(ctx, "PAUSA", VW / 2, 22, C_ORANGE, BIG, "center");
+  text(ctx, `RONDA ${p.round} · ${p.points} PUNTOS`, VW / 2, 42, C_DIM, SMALL, "center");
+  p.items.forEach((label, i) => {
+    const y = 62 + i * 17;
+    const sel = i === p.index;
+    roundRect(ctx, VW / 2 - 70, y - 3, 140, 14, 3, sel ? [38, 26, 12] : C_PANEL, sel ? C_ORANGE : C_LINE, sel ? 2 : 1);
+    text(ctx, label, VW / 2, y, sel ? C_ORANGE : C_TEXT, SMALL, "center");
+  });
+  text(ctx, "↑ ↓ ELEGIR · ENTER ACEPTAR · P O ESC: SEGUIR", VW / 2, 62 + p.items.length * 17 + 10, C_DIM, TINY, "center");
+  if (p.coop) text(ctx, "LA PARTIDA SIGUE PARA LOS DEMÁS", VW / 2, 62 + p.items.length * 17 + 20, C_YELLOW, TINY, "center");
 }
 
 function drawOver(ctx: Ctx, v: DzHudView): void {

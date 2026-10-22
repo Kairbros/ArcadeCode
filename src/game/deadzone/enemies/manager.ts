@@ -84,6 +84,16 @@ export class ZombieManager {
     }
   }
 
+  /** Solo los zombis a menos de `radius` m de la cámara proyectan sombra (el pase de sombras es lo más caro). */
+  updateShadows(cam: THREE.Vector3, radius = 16): void {
+    const r2 = radius * radius;
+    for (const z of this.list) {
+      const dx = z.position.x - cam.x;
+      const dz = z.position.z - cam.z;
+      z.setShadow(dx * dx + dz * dz < r2);
+    }
+  }
+
   /** Todos los zombis vivos que corta el rayo, ordenados por distancia. */
   hitscan(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): ZombieHit[] {
     const hits: ZombieHit[] = [];

@@ -327,6 +327,9 @@ async function startJoin(code: string) {
   }
 }
 
+// «Salir al menú» de la pausa de Dead Zone.
+window.addEventListener("arcade-quit", () => showMain());
+
 window.addEventListener("keydown", (ev) => {
   if (ev.repeat || isTyping(ev)) return;
   if (ev.code === "Escape" && switching) resume();

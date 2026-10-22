@@ -24,12 +24,16 @@ export interface Held {
 
 export type WeaponState = "ready" | "reloading" | "switching";
 
-export const MAX_SLOTS = 3;
+/** Como en Black Ops 2: solo se llevan dos armas. */
+export const MAX_SLOTS = 2;
 
 const IDS = Object.keys(WEAPONS) as WeaponId[];
 
 export class WeaponSystem {
-  readonly slots: (WeaponId | null)[] = [STARTING_WEAPON, null, null];
+  readonly slots: (WeaponId | null)[] = [STARTING_WEAPON, null];
+  /** Abatido: solo dispara la pistola (con su propia munición) hasta que lo revivan. */
+  sidearm = false;
+  private savedPistol: Ammo | null = null;
   readonly ammo: Record<WeaponId, Ammo>;
   /** Qué armas están mejoradas. */
   readonly upg: Record<WeaponId, boolean>;
@@ -58,7 +62,7 @@ export class WeaponSystem {
   }
 
   get currentId(): WeaponId | null {
-    return this.slots[this.index];
+    return this.sidearm ? STARTING_WEAPON : this.slots[this.index];
   }
 
   get current(): WeaponDef | null {
@@ -157,8 +161,29 @@ export class WeaponSystem {
     this.timer = 0.42;
   }
 
+  /** Pasa a la pistola de emergencia del abatido (cargador lleno y algo de reserva). */
+  enterSidearm(): void {
+    if (this.sidearm) return;
+    this.savedPistol = { ...this.ammo[STARTING_WEAPON] };
+    const def = weaponDef(STARTING_WEAPON, this.upg[STARTING_WEAPON]);
+    this.ammo[STARTING_WEAPON] = { mag: def.magSize, reserve: 24 };
+    this.sidearm = true;
+    this.state = "ready";
+    this.timer = 0;
+  }
+
+  /** Vuelve a las armas de siempre (con la munición de la pistola que tenía). */
+  leaveSidearm(): void {
+    if (!this.sidearm) return;
+    if (this.savedPistol) this.ammo[STARTING_WEAPON] = this.savedPistol;
+    this.savedPistol = null;
+    this.sidearm = false;
+    this.state = "ready";
+    this.timer = 0;
+  }
+
   select(slot: number): boolean {
-    if (slot < 0 || slot >= MAX_SLOTS) return false;
+    if (this.sidearm || slot < 0 || slot >= MAX_SLOTS) return false;
     const id = this.slots[slot];
     if (!id || slot === this.index) return false;
     this.index = slot;
@@ -272,7 +297,8 @@ export class WeaponSystem {
   reset(): void {
     this.slots[0] = STARTING_WEAPON;
     this.slots[1] = null;
-    this.slots[2] = null;
+    this.sidearm = false;
+    this.savedPistol = null;
     this.index = 0;
     this.state = "ready";
     this.timer = 0;
