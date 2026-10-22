@@ -85,10 +85,16 @@ const api = {
   /** Mantiene una tecla durante `seconds` de juego. */
   hold: async (code, seconds) => { await js(`__arcade.key("${code}")`); await api.step(seconds); await js(`__arcade.key("${code}", false)`); },
   press: (code) => js(`__arcade.key("${code}"); __arcade.step(1); __arcade.key("${code}", false)`),
-  /** Ratón real (CDP) en el centro o en (x, y): "down" / "up" / "click"; button "left" o "right". El primer clic captura el puntero. */
+  /** Ratón real (CDP) en el centro o en (x, y): "move" / "down" / "up" / "click"; button "left" o "right". */
   mouse: async (action, button = "left", x = 480, y = 360) => {
-    for (const type of action === "click" ? ["mousePressed", "mouseReleased"] : [action === "down" ? "mousePressed" : "mouseReleased"]) {
-      await send("Input.dispatchMouseEvent", { type, x, y, button, clickCount: 1 });
+    // Chrome necesita `buttons` en la pulsación (si no, el evento no llega como clic) y el movimiento
+    // previo fija la posición del puntero: sin eso el mousedown se pierde.
+    const mask = button === "right" ? 2 : 1;
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
+    for (const type of action === "click" ? ["mousePressed", "mouseReleased"] : [action === "move" ? null : action === "down" ? "mousePressed" : "mouseReleased"]) {
+      if (!type) continue;
+      const down = type === "mousePressed";
+      await send("Input.dispatchMouseEvent", { type, x, y, button, buttons: down ? mask : 0, clickCount: 1 });
     }
   },
   /** Dibuja y guarda <carpeta>/<nombre>.png. */

@@ -17,13 +17,15 @@ import { PoolGuest, PoolHost } from "./pool/game";
 import { PoolInput } from "./pool/input";
 import { CasinoGuest, CasinoHost } from "./casino/game";
 import { CasinoInput } from "./casino/input";
+import { CardsGuest, CardsHost } from "./cards/game";
+import { CardsInput } from "./cards/input";
 import { DeadZoneGuest, DeadZoneHost } from "./deadzone/game";
 import { Input as DeadZoneInput } from "./deadzone/core/input";
 import type { Keyboard } from "./core/keyboard";
 import { settings } from "./core/settings";
 import type { GuestGame, HostGame } from "./net/types";
 
-export type GameId = "bomber" | "karts" | "balls" | "stick" | "ruleta" | "blocks" | "survival" | "casino" | "deadzone" | "pool";
+export type GameId = "bomber" | "karts" | "balls" | "stick" | "ruleta" | "blocks" | "survival" | "casino" | "cards" | "deadzone" | "pool";
 
 export interface GameInfo {
   id: GameId;
@@ -41,6 +43,7 @@ export const GAMES: GameInfo[] = [
   { id: "survival", name: "Bloques: supervivencia", desc: "Rompe, recoge y craftea herramientas · 3D" },
   { id: "pool", name: "Billar (bola 8)", desc: "Lisas contra rayadas, efecto y bola en mano · 3D" },
   { id: "casino", name: "Casino entre amigos", desc: "Ruleta, plinko, tragaperras, moneda y dados · 3D · con peleas y robos" },
+  { id: "cards", name: "Mazo Loco", desc: "Cartas de colores: +2, +4, bloqueo y reversa · 2–4 jugadores · con bots" },
   { id: "deadzone", name: "Dead Zone: Outbreak", desc: "FPS cooperativo de zombis · rondas, armas y barricadas · 3D · 1–4 jugadores" },
 ];
 
@@ -64,6 +67,7 @@ export function createHostGame(id: GameId, keyboard: Keyboard, remoteCount: numb
   if (id === "blocks" || id === "survival") return new BlocksHost(new BlocksInput(keyboard), remoteCount, "host", id);
   if (id === "pool") return new PoolHost(new PoolInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "casino") return new CasinoHost(new CasinoInput(keyboard), remoteCount, "host");
+  if (id === "cards") return new CardsHost(new CardsInput(keyboard), remoteCount, "host", settings.bots);
   if (id === "deadzone") return new DeadZoneHost(new DeadZoneInput(keyboard), remoteCount, "host", null);
   return new BombermanHost(bothSchemes(keyboard), remoteCount);
 }
@@ -76,6 +80,7 @@ export function createGuestGame(id: GameId, index: number, keyboard: Keyboard): 
   if (id === "blocks" || id === "survival") return new BlocksGuest(index, new BlocksInput(keyboard), id);
   if (id === "pool") return new PoolGuest(index, new PoolInput(keyboard));
   if (id === "casino") return new CasinoGuest(index, new CasinoInput(keyboard));
+  if (id === "cards") return new CardsGuest(index, new CardsInput(keyboard));
   if (id === "deadzone") return new DeadZoneGuest(index, new DeadZoneInput(keyboard));
   return new BombermanGuest(index, bothSchemes(keyboard));
 }

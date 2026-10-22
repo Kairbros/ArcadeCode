@@ -67,6 +67,16 @@ cambiar a otro sin cerrar la sala (tecla **J**).
   asientos pares contra los impares y los compañeros se turnan para tirar. Con 3 o 4 personas es siempre 2 contra 2;
   con menos, **P** alterna 1 contra 1 / 2 contra 2 antes del saque (los huecos los ocupa la CPU).
 
+- **Mazo Loco (cartas)**: partidas de 2 a 4 con las reglas de siempre: se juega al **color** o al **número** de la carta
+  de arriba; **bloqueo** salta al siguiente, **reversa** cambia el sentido (con dos jugadores salta), **+2** hace robar
+  dos y saltar, y los **comodines** cambian el color (**+4** además hace robar cuatro y saltar). Si te quedas con una
+  carta tienes que decir **«¡UNO!»** (tecla U) antes de que pasen unos segundos o te caen dos de castigo. Si no puedes
+  jugar, robas una: si liga sigues en tu turno, si no pasas solo. Gana la ronda quien se queda sin cartas y se lleva
+  los puntos de las que les sobran a los demás (número por su valor, acciones 20, comodines 50); la partida es a 500.
+  Se juega con **ratón** (clic en la carta, clic en el color del comodín, botones ROBAR/PASAR/UNO) o con teclado.
+  En local los huecos los ocupan **bots** (si están desactivados, un rival de la máquina); en red, hasta cuatro amigos
+  y los huecos que queden, bots si el anfitrión los tiene puestos.
+
 En Karts, Sumo y Monigotes los huecos libres hasta 4 los ocupan **bots** (se pueden desactivar desde
 el menú; sin bots, en solitario es contrarreloj o aguantar). En Ruleta de cartuchos los bots sientan
 al **crupier** (en solitario está siempre). En red vale el ajuste del anfitrión.
@@ -90,6 +100,7 @@ En todos los juegos valen **WASD o flechas** y **Espacio o Enter** como botón d
 | Casino de deudas | WASD andar · ratón mirar · Shift correr | E: sentarse / ventanilla / palanca / timbre / botones / apartar borracho · clic: usar la mano · ↑↓←→ + Enter: apostar o depositar | R nueva partida |
 | Dead Zone | WASD andar · ratón mirar · Shift correr · Espacio saltar · Ctrl/C agacharse | Clic disparar · clic derecho apuntar · E comprar/abrir/caja/mejorador/energía y reparar (mantener) · R recargar · 1–3 armas · F linterna | M sonido · R nueva partida (anfitrión, al caer todos) |
 | Billar | Ratón: el taco apunta al cursor, con **puntería fina** manteniendo Shift o el clic derecho · A/D o ← → girar (un toque mueve poco, sostener acelera; Shift: fino) | Potencia: arrastra la barra de la izquierda hacia abajo y suelta, o W/S y Espacio tira · Efecto: clic en la bola de abajo (clic derecho / X: centro) | Rueda: potencia · clic en una tronera o Q/E: marcar la de la 8 · R otra partida |
+| Mazo Loco | Ratón: clic en la carta (o ← → y Espacio) · clic en el color al bajar un comodín (o 1–4) | Jugar: clic / Espacio · Robar: botón o D · Pasar: botón o P | U: decir ¡UNO! · Esc cierra el selector de color · R nueva partida |
 | Bloques (supervivencia) | Igual, sin volar | Golpear a un animal: clic · Romper: mantener clic · Poner o usar la mesa o el horno: clic derecho / Enter · Comer: mantener clic derecho con comida · Reaparecer: Espacio / clic | E / Tab / I inventario (clic coger/dejar, clic derecho la mitad o uno, Mayús+clic mover, clic fuera tirar) · Q tirar uno (Ctrl+Q el montón) · Esc cerrar |
 
 Comunes: **G** escala de grises · **J** cambiar de juego (con la ronda terminada) · **Esc** volver al
@@ -187,6 +198,8 @@ src/game/deadzone/   Dead Zone: Outbreak (portado de DeadZoneOutbreak): game (an
                      caja/mejorador/interruptor en centerpiece, decoración, fusión de geometría, cielo), fx (partículas, clima, postproceso),
                      game/ (rondas, puntos, interacciones), player
 src/game/pool/       Billar: table (física + línea de tiro), match (reglas + árbitro), bot, render (3D + HUD), input, game
+src/game/cards/      Mazo Loco (cartas): deck (baraja y jugadas legales), table (reglas + bots), layout (geometría
+                     compartida por dibujo y ratón), scene + cardtex (mesa 3D en primera persona y texturas de las cartas), render (carteles y respaldo 2D), input (ratón + teclas), sfx, game
 src/game/casino/     Casino de deudas: balance (rondas, topes, guardias, borrachos…), ventanilla, mech (palanca/timbre/alarma), drunk,
                      events, table (mesas), npc, world3d, scene (3D), hud, input, game (anfitrión e invitado)
 src/server/signal.ts emparejamiento y relé (compartido por Vercel y el servidor local)

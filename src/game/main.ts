@@ -18,6 +18,8 @@ import { PoolHost } from "./pool/game";
 import { PoolInput } from "./pool/input";
 import { CasinoHost } from "./casino/game";
 import { CasinoInput } from "./casino/input";
+import { CardsHost } from "./cards/game";
+import { CardsInput } from "./cards/input";
 import { DeadZoneHost } from "./deadzone/game";
 import { Input as DeadZoneInput } from "./deadzone/core/input";
 import { Keyboard, isTyping } from "./core/keyboard";
@@ -213,6 +215,15 @@ function startGame(id: GameId) {
     play({
       size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,
+    }, game);
+    return;
+  }
+  if (id === "cards") {
+    // Tú contra los bots (o contra otro en la misma mesa si están desactivados).
+    const game = new CardsHost(new CardsInput(keyboard), 0, "local", settings.bots);
+    play({
+      size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
+      get finished() { return game.finished; }, switchGame: startLocal, escape: () => game.escape(),
     }, game);
     return;
   }

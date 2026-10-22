@@ -673,6 +673,47 @@ girar** y un **mejorador de armas como el del mapa Town de Black Ops 2**, «expr
   blanca en mano la mueve el cursor local y se confirma con `k`.
 - **Pruebas**: `npm test -- pool` (física, 25 partidas CPU contra CPU, falta) y `npm run shot -- test/browser/pool.mjs`.
 
+## 6k. Mazo Loco: cartas en el hub (2026-10-21)
+
+Juego de cartas de colores para 2–4 (estilo UNO) con todas las reglas clásicas. Todo en `src/game/cards/`, lienzo
+360×270 (3D en primera persona, ver Dibujo).
+
+- **Baraja** (`deck.ts`): 108 cartas. Por color, un 0, dos de cada 1–9 y dos de cada acción (bloqueo, reversa, +2);
+  más 4 comodines y 4 comodines +4. Los ids caben en un número (color × 13 + rango, 52 comodín, 53 +4) y viajan así
+  por la red, con repeticiones: el mazo es un array de ids.
+- **Reglas** (`table.ts`, lógica pura): se juega al color o al rango de la carta de arriba. Bloqueo salta, reversa
+  cambia el sentido (con 2 jugadores salta, como manda el reglamento), +2 hace robar dos y saltar, el comodín cambia
+  el color y el +4 además hace robar cuatro. Si no puedes jugar, robas una: si liga sigues en tu turno (juegas o pasas),
+  si no pasas solo; solo se roba una vez por turno. Al quedarte con una carta se abre la ventana de «UNO» (2,6 s): si no
+  la cantas te caen dos de castigo. Gana la ronda quien se queda sin cartas y cobra los puntos de las que sobran a los
+  demás (número por su valor, acciones 20, comodines 50); la partida es a 500 y luego se reinicia con **R**. La primera
+  carta de cada ronda es siempre un número (las acciones y comodines se van al fondo: sin efectos raros al empezar).
+- **Bots**: ocupan los huecos si el ajuste está activo (en local siempre hay al menos un rival). Juegan con una espera de
+  0,7–1,25 s, guardan los comodines para cuando no hay otra, castigan con +2/+4/bloqueo si al siguiente le quedan dos
+  cartas y cantan UNO siempre. Si un invitado se cae, su silla pasa a bot y la mesa no se queda esperando.
+- **Red**: el anfitrión mueve la mesa y arbitra; el invitado manda su acción (jugar con índice y color, robar, pasar o
+  cantar UNO) con número creciente y se repite hasta verla en `ak`. **Las manos viajan enteras en el estado** (como en el
+  casino): cada uno dibuja la suya y las de los demás como dorsos, pero con devtools se podrían ver; se aceptó por no
+  romper el contrato de un solo `snap` por fotograma. Estado `CardsSnap`: `ph tu dr co hd dp tp gl un dw ut on bo ak ms
+  to mv wn bt rd` (≈300 caracteres con cuatro manos).
+- **Dibujo en 3D, primera persona** (`scene.ts`, `cardtex.ts`, `render.ts`, `layout.ts`; 2026-10-22 se pasó de 2D a Three.js a petición del
+  usuario, estilo Liar's Bar): mesa redonda de fieltro bajo una lámpara con sombras; los rivales sentados (izquierda, enfrente,
+  derecha, en el sentido del reloj) con su abanico de dorsos en las manos y un cono dorado sobre quien tiene el turno; tú
+  solo ves tus manos (mangas, palmas detrás de las cartas y pulgares por delante) sosteniendo el abanico. Las cartas de la
+  mano cuelgan de la cámara a 0,62 y se colocan con `handPoses` (centro y giro de cada una); `hitHand` pulsa la carta girada
+  de verdad (no su caja), así que lo que se ve y lo que se pulsa coinciden. Caras y dorso son texturas de lienzo 320×448
+  (borde crema, óvalo inclinado, símbolos de bloqueo/reversa/+2/+4/comodín, índices en dos esquinas) en geometría de
+  esquinas redondeadas, con mipmaps y anisotropía. Animaciones: la carta jugada vuela a la pila (la del rival sale de su
+  abanico), la robada sube desde abajo, la que liga se levanta y la señalada sube más; la pila guarda las cinco últimas
+  jugadas con giros fijos y un aro del color activo con su luz. Los carteles de los rivales (nombre, cartas, puntos, ¡UNO!)
+  se dibujan en 2D sobre sus cabezas proyectadas. Si no hay WebGL queda el dibujo 2D de antes como respaldo.
+- **Entrada** (`input.ts`): ratón (clic en carta, botón o color; `attachMouse` una vez) y teclado (← →, Espacio, D, P, U,
+  1–4, Esc). Una carta que no liga devuelve la acción 0 y la mesa avisa «ESA CARTA NO LIGA» en vez de no hacer nada.
+- **Pruebas**: `npm test -- cards` (`cards-rules`: baraja, jugadas legales, efectos, robo, UNO, puntos, partida completa
+  de bots sin perder cartas y geometría de la mesa en el lienzo; `cards-net`: jugada de un invitado con acuse, mensajes
+  repetidos, fuera de turno, comodín con color, estado < 400 caracteres, desconexión a bot, reversa y reinicio). Capturas
+  y partida real: `npm run shot -- test/browser/cards.mjs` (juega una carta con el ratón, elige color y roba de verdad).
+
 ## 6e. Estilo 3D: bloques simples (regla del usuario)
 
 **Todo lo 3D se modela con cajas grandes y simples**, como figuras de bloques: una caja para el torso, otra para
