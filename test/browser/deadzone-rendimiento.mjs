@@ -1,6 +1,7 @@
 // Rendimiento aproximado de Dead Zone: ms por fotograma con zombis, lluvia y postproceso, quitando piezas.
 export default async function ({ js, start, step, draw }) {
   await start("deadzone");
+  await js(`(() => { const g = __arcade.game; g.phase = "play"; g.loadMap(window.__dzMap || "sector09"); })()`);
   await step(0.5);
   await js(`(() => { const g = __arcade.game; g.rounds.state = "intermission"; g.rounds.timer = 9999; const p = g.seats[0].p; p.position.set(0, 0, -9); p.yaw = 0;
     for (let i = 0; i < 14; i++) { const zb = g.stage.zombies.spawn(["walker","runner","brute"][i % 3], 3, -6 + i * 0.9, -14 - (i % 4)); zb.state = "chasing"; zb.stateT = 1; zb.hp = 9999; } })()`);

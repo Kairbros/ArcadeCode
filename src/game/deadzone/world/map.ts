@@ -6,21 +6,16 @@ import { glowSprite } from "../../core/three";
 import { makeCollider, type Collider } from "../core/collision";
 import { BOX_PRICE, WEAPONS, type WeaponId } from "../weapons/defs";
 import { batchStatic } from "./batch";
+import { PlankRig } from "./planks";
+import { buildExtraProp } from "./props2";
+import { buildPerkMachine, type PerkMachine } from "./perkmachines";
+import { PERK_IDS } from "../game/perks";
 import { buildMysteryBox, buildPowerSwitch, buildUpgrader, type MysteryBox, type PowerSwitch, type Upgrader } from "./centerpiece";
-import { buildDecorations, floorDecal } from "./decor";
+import { floorDecal } from "./decor";
 import { TILE_M, texture } from "./textures";
+import type { MapDef } from "./mapdef";
 import {
-  BUYS,
-  INTERIORS,
-  LIGHTS,
-  MAP_BOUNDS,
-  MYSTERY_BOX,
-  POWER_SWITCH,
-  PROPS,
-  SPAWNS,
-  UPGRADER,
-  WALLS,
-  inRoom,
+  inRooms,
   type BuySpec,
   type Hole,
   type MatKind,
@@ -57,6 +52,8 @@ export interface BarricadeWindow {
   width: number;
   planks: number;
   group: THREE.Group;
+  /** Animación de los tablones (salen despedidos al arrancarlos y flotan hasta su sitio al reparar). */
+  rig: PlankRig;
   /** Punto interior y exterior del hueco (para la IA y el jugador). */
   inner: { x: number; z: number };
   outer: { x: number; z: number };
@@ -86,6 +83,8 @@ export interface LightSource {
 }
 
 export interface BuiltMap {
+  /** El mapa del que sale (nombre, sitios de las máquinas, aparición del jugador…). */
+  def: MapDef;
   root: THREE.Group;
   /** Lo que se mueve (puertas, tablones, fuego): no entra en la fusión de geometría. */
   dyn: THREE.Group;
@@ -96,6 +95,9 @@ export interface BuiltMap {
   box: MysteryBox;
   upgrader: Upgrader;
   power: PowerSwitch;
+  perks: PerkMachine[];
+  /** Lleva la caja misteriosa al sitio `i` de `BOX_SPOTS` (colisión incluida). */
+  moveBox(i: number): void;
   spawns: { x: number; z: number }[];
   lights: LightSource[];
   /** Barriles en llamas (de ellos suben brasas y humo). */
@@ -108,7 +110,7 @@ export interface BuiltMap {
   dispose(): void;
 }
 
-export type { MysteryBox, PowerSwitch, Upgrader };
+export type { MysteryBox, PowerSwitch, Upgrader, PerkMachine };
 
 const matCache = new Map<string, THREE.Material>();
 
@@ -121,6 +123,12 @@ const SURFACE: Record<string, { rough: number; metal: number; bump: number }> = 
   wood: { rough: 0.78, metal: 0.04, bump: 1.8 },
   tile: { rough: 0.5, metal: 0.05, bump: 1.2 },
   rust: { rough: 0.7, metal: 0.45, bump: 2 },
+  grass: { rough: 0.95, metal: 0.0, bump: 1.8 },
+  dirt: { rough: 0.95, metal: 0.0, bump: 2.2 },
+  barn: { rough: 0.8, metal: 0.02, bump: 2.2 },
+  siding: { rough: 0.82, metal: 0.02, bump: 2.0 },
+  plaster: { rough: 0.9, metal: 0.02, bump: 1.6 },
+  cobble: { rough: 0.7, metal: 0.05, bump: 2.6 },
 };
 
 /** Cartel de tiza de una compra de pared: silueta de arma, nombre y precio. */
@@ -245,12 +253,13 @@ function solidSpans(length: number, holes: Hole[]): Span[] {
   return out;
 }
 
-export function buildMap(scene: THREE.Scene): BuiltMap {
+export function buildMap(scene: THREE.Scene, def: MapDef): BuiltMap {
+  const MAP_BOUNDS = def.bounds;
   const root = new THREE.Group();
-  root.name = "sector09";
+  root.name = def.id;
   scene.add(root);
   const dyn = new THREE.Group();
-  dyn.name = "sector09-dyn";
+  dyn.name = `${def.id}-dyn`;
   scene.add(dyn);
 
   const colliders: Collider[] = [];
@@ -260,10 +269,10 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
   const fires: { x: number; y: number; z: number }[] = [];
   const animated: ((dt: number, time: number) => void)[] = [];
 
-  // --- Suelo del sector (asfalto) ---
+  // --- Suelo exterior ---
   const groundW = MAP_BOUNDS.maxX - MAP_BOUNDS.minX;
   const groundD = MAP_BOUNDS.maxZ - MAP_BOUNDS.minZ;
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(groundW, groundD), material("asphalt"));
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(groundW, groundD), material(def.ground));
   ground.rotation.x = -Math.PI / 2;
   ground.position.set((MAP_BOUNDS.minX + MAP_BOUNDS.maxX) / 2, 0, (MAP_BOUNDS.minZ + MAP_BOUNDS.maxZ) / 2);
   root.add(ground);
@@ -275,8 +284,16 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
     ),
   );
 
+  // --- Aceras, caminos y patios (sin techo) ---
+  for (const f of def.floors ?? []) {
+    const fl = new THREE.Mesh(new THREE.PlaneGeometry(f.x1 - f.x0, f.z1 - f.z0), material(f.mat));
+    fl.rotation.x = -Math.PI / 2;
+    fl.position.set((f.x0 + f.x1) / 2, 0.008, (f.z0 + f.z1) / 2);
+    root.add(fl);
+  }
+
   // --- Suelos interiores (hormigón/baldosa) ---
-  for (const r of INTERIORS) {
+  for (const r of def.interiors) {
     const w = r.x1 - r.x0;
     const d = r.z1 - r.z0;
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, d), material(r.mat));
@@ -297,7 +314,7 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
   }
 
   // --- Muros ---
-  for (const run of WALLS) buildWallRun(run);
+  for (const run of def.walls) buildWallRun(run);
 
   function buildWallRun(run: WallRun): void {
     const dx = run.x2 - run.x1;
@@ -378,8 +395,8 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
 
         // El lado interior es el que cae dentro de un recinto (el otro es la calle exterior).
         const probe = 1.3;
-        const plusInside = inRoom(cx + px * probe, cz + pz * probe) !== null;
-        const minusInside = inRoom(cx - px * probe, cz - pz * probe) !== null;
+        const plusInside = inRooms(def.rooms, cx + px * probe, cz + pz * probe) !== null;
+        const minusInside = inRooms(def.rooms, cx - px * probe, cz - pz * probe) !== null;
         const sign = minusInside && !plusInside ? -1 : 1;
         const nx = px * sign;
         const nz = pz * sign;
@@ -396,6 +413,9 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
           planks.add(plank);
         }
         const innerSign = 1;
+        // Lado de la calle en el eje local Z del hueco (hacia donde salen despedidos los tablones).
+        const localZ = { x: Math.sin(rotY), z: Math.cos(rotY) };
+        const outerSign = -(nx * localZ.x + nz * localZ.z) >= 0 ? 1 : -1;
         windows.push({
           id: hole.id ?? `w_${windows.length}`,
           x: cx,
@@ -405,6 +425,7 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
           width: len,
           planks: MAX_PLANKS,
           group: planks,
+          rig: new PlankRig(planks, outerSign, len),
           inner: { x: cx + nx * 1.1, z: cz + nz * 1.1 },
           outer: { x: cx - nx * 1.1, z: cz - nz * 1.1 },
           barricade,
@@ -456,7 +477,7 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
   }
 
   // --- Props del escenario ---
-  for (const spec of PROPS) buildProp(spec);
+  for (const spec of def.props) buildProp(spec);
 
   function addCollider(
     x: number,
@@ -470,6 +491,13 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
     colliders.push(
       makeCollider({ x: x - w / 2, y: y0, z: z - d / 2 }, { x: x + w / 2, y: y0 + h, z: z + d / 2 }, tag),
     );
+  }
+
+  /** Colisionador de un prop girado: la caja que envuelve al rectángulo `w × d` girado `rot`. */
+  function addRotCollider(x: number, z: number, w: number, d: number, h: number, rot: number): void {
+    const c = Math.abs(Math.cos(rot));
+    const s = Math.abs(Math.sin(rot));
+    addCollider(x, z, w * c + d * s, w * s + d * c, h);
   }
 
   function buildProp(spec: PropSpec): void {
@@ -842,13 +870,21 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
         add(pipe, 0, 1.2, 0);
         break;
       }
+      default:
+        buildExtraProp(spec, {
+          add: (m, x, y, z) => add(m, x, y, z),
+          flat,
+          box: boxMesh,
+          mat: material,
+          collide: (w, d, h) => addRotCollider(spec.x, spec.z, w, d, h, rot),
+        });
     }
     g.updateMatrixWorld();
   }
 
   // --- Compras de pared (tiza + cartel) ---
   const buys: BuyPoint[] = [];
-  for (const spec of BUYS) {
+  for (const spec of def.buys) {
     const normal = new THREE.Vector3(Math.cos(spec.facing), 0, Math.sin(spec.facing));
     const group = new THREE.Group();
     group.position.set(spec.x - normal.x * 0.2, 1.35, spec.z - normal.z * 0.2);
@@ -871,31 +907,59 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
   }
 
   // --- Las tres máquinas: caja misteriosa (centro de la plaza), mejorador (Bloque B) e interruptor (depósito) ---
-  const box = buildMysteryBox(MYSTERY_BOX.x, MYSTERY_BOX.z, BOX_PRICE);
+  const BOX0 = def.boxSpots[0];
+  const box = buildMysteryBox(BOX0.x, BOX0.z, BOX_PRICE);
+  box.moveTo(BOX0.x, BOX0.z, BOX0.rot, BOX0.dais);
   dyn.add(box.group);
-  colliders.push(
-    makeCollider(
-      { x: MYSTERY_BOX.x - 0.9, y: 0, z: MYSTERY_BOX.z - 0.58 },
-      { x: MYSTERY_BOX.x + 0.9, y: 1.1, z: MYSTERY_BOX.z + 0.58 },
-      "prop",
-    ),
+  const boxCollider = makeCollider(
+    { x: BOX0.x - 0.9, y: 0, z: BOX0.z - 0.58 },
+    { x: BOX0.x + 0.9, y: 1.1, z: BOX0.z + 0.58 },
+    "prop",
   );
+  colliders.push(boxCollider);
+  const moveBox = (i: number): void => {
+    const sp = def.boxSpots[i];
+    if (!sp) return;
+    box.spot = i;
+    box.moveTo(sp.x, sp.z, sp.rot, sp.dais);
+    const turned = Math.abs(Math.sin(sp.rot)) > 0.5;
+    const hx = turned ? 0.58 : 0.9;
+    const hz = turned ? 0.9 : 0.58;
+    boxCollider.min = { x: sp.x - hx, y: 0, z: sp.z - hz };
+    boxCollider.max = { x: sp.x + hx, y: 1.1, z: sp.z + hz };
+  };
+  const UPGRADER = def.upgrader;
   const upgrader = buildUpgrader(UPGRADER.x, UPGRADER.z, UPGRADER.facing);
   dyn.add(upgrader.group);
+  const upAlongX = Math.abs(Math.cos(UPGRADER.facing)) < 0.5; // de cara al norte/sur: ancho en X
   colliders.push(
     makeCollider(
-      { x: UPGRADER.x - 1.0, y: 0, z: UPGRADER.z - 0.62 },
-      { x: UPGRADER.x + 1.0, y: 2.6, z: UPGRADER.z + 0.66 },
+      { x: UPGRADER.x - (upAlongX ? 1.0 : 0.66), y: 0, z: UPGRADER.z - (upAlongX ? 0.66 : 1.0) },
+      { x: UPGRADER.x + (upAlongX ? 1.0 : 0.66), y: 2.6, z: UPGRADER.z + (upAlongX ? 0.66 : 1.0) },
       "prop",
     ),
   );
+  const perks = PERK_IDS.map((id) => {
+    const m = buildPerkMachine(id, def.perkSpots[id]);
+    dyn.add(m.group);
+    colliders.push(
+      makeCollider(
+        { x: m.group.position.x - m.half.x, y: 0, z: m.group.position.z - m.half.z },
+        { x: m.group.position.x + m.half.x, y: 2.4, z: m.group.position.z + m.half.z },
+        "prop",
+      ),
+    );
+    return m;
+  });
+  const POWER_SWITCH = def.powerSwitch;
   const power = buildPowerSwitch(POWER_SWITCH.x, POWER_SWITCH.z, POWER_SWITCH.facing);
   dyn.add(power.group);
   // Un poco hacia dentro de la sala, para que el cartel «ACTIVAR» se lea al acercarse.
-  power.position.z = POWER_SWITCH.z + 0.7;
+  power.position.x = POWER_SWITCH.x + Math.cos(POWER_SWITCH.facing) * 0.7;
+  power.position.z = POWER_SWITCH.z + Math.sin(POWER_SWITCH.facing) * 0.7;
 
   // --- Luces: solo las fuentes; la escena enciende las más cercanas (stage.ts) ---
-  for (const spec of LIGHTS) {
+  for (const spec of def.lights) {
     lights.push({ x: spec.x, y: spec.y, z: spec.z, color: spec.color, intensity: spec.intensity, distance: spec.distance, flicker: !!spec.flicker, seed: Math.random() * 100 });
     // Bombilla visible.
     const bulb = new THREE.Mesh(
@@ -907,7 +971,7 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
   }
 
   // --- Sangre, pintadas, marcas de la calzada y charcos ---
-  buildDecorations(root, dyn, animated);
+  def.decorate(root, dyn, animated);
 
   // Fusión de la geometría estática: una malla por material.
   batchStatic(root, (m) => m.userData.tile as number | undefined);
@@ -922,7 +986,10 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
     box,
     upgrader,
     power,
-    spawns: SPAWNS.map((s) => ({ ...s })),
+    perks,
+    moveBox,
+    def,
+    spawns: def.spawns.map((s) => ({ ...s })),
     lights,
     fires,
     animated,
@@ -932,10 +999,16 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
         const target = d.open ? 1 : 0;
         if (Math.abs(d.k - target) > 0.002) {
           d.k += (target - d.k) * Math.min(1, dt * 5);
-          d.panel.rotation.y = d.k * 1.9;
+          // La hoja se hunde en el suelo (antes giraba sobre su eje y se quedaba cruzada en el paso).
+          d.panel.position.y = -d.k * (DOOR_H + 0.1);
         }
       }
+      for (const w of windows) w.rig.update(dt);
       upgrader.powered = power.on;
+      for (const m of perks) {
+        m.powered = power.on;
+        m.update(dt, time);
+      }
       box.update(dt, time, this.camPos);
       upgrader.update(dt, time);
       power.update(dt, time);
@@ -944,6 +1017,7 @@ export function buildMap(scene: THREE.Scene): BuiltMap {
     dispose() {
       box.dispose();
       upgrader.dispose();
+      for (const m of perks) m.dispose();
     },
   };
 }

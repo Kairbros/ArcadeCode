@@ -61,7 +61,21 @@ export interface PropSpec {
     | "bus"
     | "streetlight"
     | "tent"
-    | "generator";
+    | "generator"
+    | "hay"
+    | "silo"
+    | "tractor"
+    | "well"
+    | "trough"
+    | "tree"
+    | "sofa"
+    | "bed"
+    | "pump"
+    | "vending"
+    | "luggage"
+    | "stool"
+    | "clocktower"
+    | "jersey";
   x: number;
   z: number;
   rot?: number;
@@ -99,13 +113,21 @@ export const ROOMS: { x0: number; z0: number; x1: number; z1: number; name: stri
   { name: "PLAZA", x0: -14, z0: -24, x1: 14, z1: -8 },
   { name: "ARMERÍA", x0: 14, z0: -24, x1: 22, z1: -12 },
   { name: "BLOQUE B", x0: -23, z0: -24, x1: -14, z1: -12 },
-  { name: "PASAJE", x0: -20, z0: -13, x1: -14, z1: 9 },
+  { name: "PASAJE", x0: -20, z0: -12, x1: -14, z1: 9 },
   { name: "CALLEJÓN", x0: -20, z0: 9, x1: -8, z1: 18 },
   { name: "CALLE NORTE", x0: -5, z0: -32, x1: 5, z1: -24 },
   { name: "DEPÓSITO", x0: -12, z0: -38, x1: 12, z1: -32 },
 ];
 
-/** ¿El punto cae dentro de algún recinto? */
+/** ¿El punto cae dentro de algún recinto de la lista? */
+export function inRooms(rooms: readonly { name: string; x0: number; z0: number; x1: number; z1: number }[], x: number, z: number): string | null {
+  for (const r of rooms) {
+    if (x > r.x0 && x < r.x1 && z > r.z0 && z < r.z1) return r.name;
+  }
+  return null;
+}
+
+/** ¿El punto cae dentro de algún recinto del SECTOR 09? */
 export function inRoom(x: number, z: number): string | null {
   for (const r of ROOMS) {
     if (x > r.x0 && x < r.x1 && z > r.z0 && z < r.z1) return r.name;
@@ -113,13 +135,13 @@ export function inRoom(x: number, z: number): string | null {
   return null;
 }
 
-/** Recintos con suelo propio y techo (la lluvia no cae dentro). */
+/** Recintos con suelo propio y techo (el clima de ceniza y niebla no entra). */
 export const INTERIORS: { x0: number; z0: number; x1: number; z1: number; mat: "tile" | "concrete" | "wood" }[] = [
   { x0: 5, z0: -8, x1: 12, z1: 1, mat: "tile" },
   { x0: 14, z0: -24, x1: 22, z1: -12, mat: "concrete" },
   { x0: -23, z0: -24, x1: -14, z1: -12, mat: "wood" },
   { x0: -12, z0: -38, x1: 12, z1: -32, mat: "concrete" },
-  { x0: -20, z0: -13, x1: -14, z1: 9, mat: "concrete" },
+  { x0: -20, z0: -12, x1: -14, z1: 9, mat: "concrete" },
 ];
 
 export const PLAYER_SPAWN = { x: 0, y: 0, z: 14, yaw: 0 };
@@ -178,7 +200,7 @@ export const WALLS: WallRun[] = [
     z2: -8,
     mat: "concrete",
     holes: [
-      { from: 11, to: 13, kind: "door", id: "d_pasillo", cost: 750, label: "PASAJE OESTE" },
+      { from: 13, to: 15, kind: "door", id: "d_pasillo", cost: 750, label: "PASAJE OESTE" },
       { from: 6, to: 8, kind: "door", id: "d_edificio", cost: 1250, label: "BLOQUE B" },
     ],
   },
@@ -224,9 +246,8 @@ export const WALLS: WallRun[] = [
   { x1: 14, z1: -24, x2: 22, z2: -24, mat: "metal" },
   { x1: 14, z1: -12, x2: 22, z2: -12, mat: "metal" },
 
-  // --- Pasaje oeste (x −20..−14, z −13..9) ---
-  { x1: -20, z1: -13, x2: -20, z2: 9, mat: "concrete" },
-  { x1: -20, z1: -13, x2: -14, z2: -13, mat: "concrete" },
+  // --- Pasaje oeste (x −20..−14, z −12..9; su muro norte es el sur del Bloque B) ---
+  { x1: -20, z1: -12, x2: -20, z2: 9, mat: "concrete" },
   { x1: -14, z1: -8, x2: -14, z2: 9, mat: "concrete", holes: [{ from: 13, to: 15, kind: "window", id: "w_pasillo_e" }] },
 
   // --- Callejón oeste (x −20..−8, z 9..18) ---
@@ -264,6 +285,19 @@ export const BUYS: BuySpec[] = [
 /** Caja misteriosa: en el centro de la plaza, el corazón del sector. */
 export const MYSTERY_BOX = { x: 0, z: -16, y: 0 };
 
+/**
+ * Sitios donde puede estar la caja (el 0 es la plaza). Cuando sale el oso se va a otro. `rot` gira el frente (+Z local) hacia
+ * donde mira el jugador al abrirla; `dais`: solo la plaza lleva plataforma.
+ */
+export const BOX_SPOTS: { x: number; z: number; rot: number; dais: boolean; name: string }[] = [
+  { x: 0, z: -16, rot: 0, dais: true, name: "PLAZA" },
+  { x: 0.5, z: 12.8, rot: Math.PI, dais: false, name: "PATIO" },
+  { x: 9.4, z: -4.7, rot: -Math.PI / 2, dais: false, name: "TIENDA" },
+  { x: 18.8, z: -17.6, rot: Math.PI / 2, dais: false, name: "ARMERÍA" },
+  { x: -19.8, z: -18.6, rot: -Math.PI / 2, dais: false, name: "BLOQUE B" },
+  { x: -17.2, z: 2.0, rot: Math.PI / 2, dais: false, name: "PASAJE" },
+];
+
 /** Mejorador de armas (Bloque B, pared norte; mira al sur) y interruptor de la energía (depósito norte). */
 export const UPGRADER = { x: -21.4, z: -23.12, facing: Math.PI / 2 };
 export const POWER_SWITCH = { x: -1.5, z: -37.6, facing: Math.PI / 2 };
@@ -279,7 +313,7 @@ export const PROPS: PropSpec[] = [
   { kind: "dumpster", x: 7.2, z: 8.8, rot: 0.3 },
 
   // Calle principal
-  { kind: "car", x: 2.6, z: 3, rot: -0.15 },
+  { kind: "car", x: 1.6, z: 3, rot: -0.15 },
   { kind: "dumpster", x: 3.8, z: -4.2, rot: 1.5 },
   { kind: "crate", x: 4, z: -6.5 },
   { kind: "rubble", x: 1, z: -2.5 },
@@ -302,7 +336,7 @@ export const PROPS: PropSpec[] = [
   { kind: "crate", x: 11, z: -7 },
 
   // Armería
-  { kind: "counter", x: 15.5, z: -18, rot: Math.PI / 2 },
+  { kind: "counter", x: 15.5, z: -19.7, rot: Math.PI / 2 },
   { kind: "crate", x: 20, z: -22 },
   { kind: "crate", x: 19, z: -13.5, v: 1 },
   { kind: "shelf", x: 16, z: -22.5, rot: 0 },
@@ -314,7 +348,7 @@ export const PROPS: PropSpec[] = [
   { kind: "rubble", x: -15.5, z: -22.6 },
 
   // Pasaje y callejón
-  { kind: "container", x: -17, z: -11, rot: 0 },
+  { kind: "container", x: -18.6, z: -8.5, rot: Math.PI / 2 },
   { kind: "barrel", x: -19, z: 4 },
   { kind: "dumpster", x: -18, z: 10.5, rot: 0.1 },
   { kind: "crate", x: -12, z: 14 },
@@ -330,7 +364,7 @@ export const PROPS: PropSpec[] = [
 
   // --- Ambientación ---
   // Calle: autobús siniestrado, farolas, conos y cadáveres.
-  { kind: "bus", x: -2.9, z: -0.2, rot: 0.05 },
+  { kind: "bus", x: -1.2, z: -0.2, rot: 0.05 },
   { kind: "streetlight", x: -4.4, z: 5.5, rot: Math.PI / 2 },
   { kind: "streetlight", x: 4.4, z: -6.5, rot: -Math.PI / 2, v: 1 },
   { kind: "cone", x: 2.2, z: 6.8, rot: 0.3 },

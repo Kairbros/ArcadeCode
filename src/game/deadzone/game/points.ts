@@ -11,18 +11,27 @@ export const POINTS = {
   roundBonus: 100,
   /** Puntos por sobrevivir a la ronda completos (se suman al final). */
   perRoundKillBonus: 0,
+  /** Extra por rematar a un infectado con el cuchillo (arriesgas más). */
+  knifeBonus: 60,
 } as const;
 
 export class Points {
   private value: number = POINTS.start;
+  /** Multiplicador de lo que se gana (2 con el poder de puntos dobles). */
+  multiplier = 1;
 
   get balance(): number {
     return this.value;
   }
 
   add(amount: number): number {
-    this.value += Math.max(0, Math.round(amount));
+    this.value += Math.max(0, Math.round(amount * this.multiplier));
     return this.value;
+  }
+
+  /** Devuelve puntos tal cual (reembolso: no se multiplican con puntos dobles). */
+  refund(amount: number): void {
+    this.value += Math.max(0, Math.round(amount));
   }
 
   /** Gasta si hay saldo. Devuelve false y no toca el saldo si no llega. */
@@ -39,5 +48,6 @@ export class Points {
 
   reset(to: number = POINTS.start): void {
     this.value = to;
+    this.multiplier = 1;
   }
 }

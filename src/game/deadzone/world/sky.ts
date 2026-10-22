@@ -83,7 +83,10 @@ export interface Sky {
   dispose(): void;
 }
 
-export function buildSky(): Sky {
+/** Horizonte: ciudad en ruinas, colinas con árboles y granjas lejanas, o un pueblo bajo con campanario. */
+export type SkyStyle = "city" | "hills" | "town";
+
+export function buildSky(style: SkyStyle = "city"): Sky {
   const uniforms = { uTime: { value: 0 }, uFlash: { value: 0 }, uMoon: { value: MOON_DIR.clone() } };
   const mat = new THREE.ShaderMaterial({ side: THREE.BackSide, depthWrite: false, fog: false, uniforms, vertexShader: VERT, fragmentShader: FRAG });
   const dome = new THREE.Mesh(new THREE.SphereGeometry(180, 32, 20), mat);
@@ -105,17 +108,39 @@ export function buildSky(): Sky {
   const litGeoms: THREE.BufferGeometry[] = [];
   const cx = 0;
   const cz = -9;
-  for (let i = 0; i < 70; i++) {
-    const a = (i / 70) * Math.PI * 2 + seed() * 0.08;
-    const dist = 64 + seed() * 46;
-    const w = 6 + seed() * 14;
-    const d = 6 + seed() * 12;
-    const h = 14 + seed() * 46;
-    const g = new THREE.BoxGeometry(w, h, d);
-    g.translate(cx + Math.cos(a) * dist, h / 2 - 1, cz + Math.sin(a) * dist);
+  const count = style === "city" ? 70 : style === "town" ? 64 : 90;
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2 + seed() * 0.08;
+    const dist = (style === "hills" ? 78 : 64) + seed() * 46;
+    let w = 6 + seed() * 14;
+    let d = 6 + seed() * 12;
+    let h = style === "town" ? 9 + seed() * 22 : 14 + seed() * 46;
+    let g: THREE.BufferGeometry;
+    if (style === "hills") {
+      // Colinas redondeadas con pinos y, de vez en cuando, un granero o un silo lejano.
+      const pick = seed();
+      if (pick < 0.5) {
+        w = 18 + seed() * 30;
+        h = 5 + seed() * 12;
+        g = new THREE.SphereGeometry(1, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+        g.scale(w, h, 12 + seed() * 14);
+      } else if (pick < 0.88) {
+        h = 8 + seed() * 14;
+        g = new THREE.ConeGeometry(2 + seed() * 2.5, h, 6);
+        g.translate(0, h / 2, 0);
+      } else {
+        h = 7 + seed() * 5;
+        g = new THREE.BoxGeometry(10, h, 8);
+        g.translate(0, h / 2, 0);
+      }
+      g.translate(cx + Math.cos(a) * dist, -1, cz + Math.sin(a) * dist);
+    } else {
+      g = new THREE.BoxGeometry(w, h, d);
+      g.translate(cx + Math.cos(a) * dist, h / 2 - 1, cz + Math.sin(a) * dist);
+    }
     geoms.push(g);
     // Ventanas encendidas (pocas).
-    const n = Math.floor(seed() * 4);
+    const n = style === "hills" ? (seed() < 0.2 ? 1 : 0) : Math.floor(seed() * 4);
     for (let k = 0; k < n; k++) {
       const wg = new THREE.PlaneGeometry(1.1, 1.5);
       const toCenter = Math.atan2(cz - (cz + Math.sin(a) * dist), cx - (cx + Math.cos(a) * dist));

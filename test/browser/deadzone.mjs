@@ -1,6 +1,7 @@
 // Capturas de Dead Zone en el hub: salida, zombis, disparo, compra y pantalla de abatido (npm run shot -- test/browser/deadzone.mjs).
 export default async function ({ js, start, step, draw, shot, press }) {
   await start("deadzone");
+  await js(`(() => { const g = __arcade.game; g.phase = "play"; g.loadMap(window.__dzMap || "sector09"); })()`);
   await step(1);
   await draw(10);
   await shot("dz-0-inicio");

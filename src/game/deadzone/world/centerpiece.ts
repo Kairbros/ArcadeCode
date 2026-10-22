@@ -10,7 +10,7 @@ import { buildWeaponModel, type WeaponModel } from "../weapons/model";
 import { texture } from "./textures";
 
 /** Texto brillante en un cartel (canvas), para los rótulos de las máquinas. */
-function sign(text: string, color: string, w = 256, h = 64, font = "bold 34px 'Courier New', monospace"): THREE.CanvasTexture {
+export function sign(text: string, color: string, w = 256, h = 64, font = "bold 34px 'Courier New', monospace"): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
@@ -93,14 +93,20 @@ function beam(color: number, height: number, radius: number): THREE.Mesh {
 }
 
 // --- Caja misteriosa -------------------------------------------------------------------------------
-export type BoxPhase = 0 | 1 | 2;
+export type BoxPhase = 0 | 1 | 2 | 3;
 
 export interface MysteryBox {
   position: THREE.Vector3;
   group: THREE.Group;
   price: number;
-  /** 0 cerrada, 1 girando (cambia de arma), 2 ofreciendo el arma. */
+  /** 0 cerrada, 1 girando (cambia de arma), 2 ofreciendo el arma, 3 enseñando el oso (se va a otro sitio). */
   phase: BoxPhase;
+  /** El oso de peluche está a la vista (fase 3). */
+  teddy: boolean;
+  /** Sitio donde está (índice de `BOX_SPOTS`). */
+  spot: number;
+  /** Cambia la caja de sitio. */
+  moveTo(x: number, z: number, rot: number, dais: boolean): void;
   /** Arma que se ve flotando, y los segundos que quedan de la oferta (para que se hunda al final). */
   shown: WeaponId | null;
   left: number;
@@ -117,19 +123,21 @@ export function buildMysteryBox(x: number, z: number, price: number): MysteryBox
   group.position.set(x, 0, z);
 
   // Plataforma circular con aro luminoso.
+  const daisG = new THREE.Group();
+  group.add(daisG);
   const dais = new THREE.Mesh(new THREE.CylinderGeometry(2.7, 2.9, 0.16, 36), new THREE.MeshStandardMaterial({ map: texture("concrete"), roughness: 0.85, metalness: 0.1, color: 0xb8c0c8 }));
   dais.position.y = 0.08;
   dais.userData.dyn = false;
-  group.add(dais);
+  daisG.add(dais);
   const ringMat = new THREE.MeshStandardMaterial({ color: 0x08202e, emissive: 0x3ab4ff, emissiveIntensity: 2.2, roughness: 0.3 });
   const ring = new THREE.Mesh(new THREE.TorusGeometry(2.45, 0.05, 8, 48), ringMat);
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.17;
-  group.add(ring);
+  daisG.add(ring);
   const ring2 = new THREE.Mesh(new THREE.TorusGeometry(1.5, 0.035, 8, 40), ringMat);
   ring2.rotation.x = Math.PI / 2;
   ring2.position.y = 0.17;
-  group.add(ring2);
+  daisG.add(ring2);
   // Doce marcas alrededor del aro grande.
   const tickGeo = new THREE.BoxGeometry(0.14, 0.04, 0.4);
   for (let i = 0; i < 12; i++) {
@@ -137,7 +145,7 @@ export function buildMysteryBox(x: number, z: number, price: number): MysteryBox
     const t = new THREE.Mesh(tickGeo, ringMat);
     t.position.set(Math.cos(a) * 2.1, 0.17, Math.sin(a) * 2.1);
     t.rotation.y = -a;
-    group.add(t);
+    daisG.add(t);
   }
 
   // Cuerpo de la caja.
@@ -198,15 +206,27 @@ export function buildMysteryBox(x: number, z: number, price: number): MysteryBox
   group.add(display);
   const models = new Map<WeaponId, WeaponModel>();
   let shownNow: WeaponId | null = null;
+  const teddy = buildTeddy();
+  teddy.visible = false;
+  group.add(teddy);
 
   const box: MysteryBox = {
     position: new THREE.Vector3(x, 0.9, z),
     group,
     price,
     phase: 0,
+    teddy: false,
+    spot: 0,
     shown: null,
     left: 0,
     openK: 0,
+    moveTo(nx, nz, rot, withDais) {
+      group.position.set(nx, 0, nz);
+      group.rotation.y = rot;
+      box.position.set(nx, 0.9, nz);
+      daisG.visible = withDais;
+      ring.visible = withDais;
+    },
     update(dt, time, camPos = CAM0) {
       const open = box.phase === 0 ? 0 : 1;
       box.openK = damp(box.openK, open, 7, dt);
@@ -239,6 +259,16 @@ export function buildMysteryBox(x: number, z: number, price: number): MysteryBox
           display.add(holder);
         }
       }
+      // El oso: sale de la caja riéndose, gira y rebota; los últimos instantes parpadea antes de irse.
+      teddy.visible = box.teddy && box.openK > 0.55;
+      if (teddy.visible) {
+        const t = time * 5;
+        teddy.position.set(0, 1.45 + Math.abs(Math.sin(t)) * 0.28, 0);
+        teddy.rotation.y += dt * 4.5;
+        teddy.rotation.z = Math.sin(t) * 0.18;
+        teddy.scale.setScalar(1 + Math.sin(t * 2) * 0.05);
+        teddy.visible = !(box.left < 1 && Math.floor(time * 8) % 2 === 0);
+      }
       display.visible = !!box.shown && box.openK > 0.55;
       if (display.visible) {
         const sink = box.phase === 2 ? clamp(1 - box.left / 3, 0, 1) * 0.5 : 0;
@@ -256,6 +286,46 @@ export function buildMysteryBox(x: number, z: number, price: number): MysteryBox
     },
   };
   return box;
+}
+
+/** Oso de peluche burlón (el que sale de la caja en lugar de un arma): pelaje marrón, hocico, orejas, lazo y ojos brillantes. */
+function buildTeddy(): THREE.Group {
+  const g = new THREE.Group();
+  const fur = new THREE.MeshStandardMaterial({ color: 0x9a6a3c, roughness: 0.95 });
+  const light = new THREE.MeshStandardMaterial({ color: 0xd8b078, roughness: 0.95 });
+  const bow = new THREE.MeshStandardMaterial({ color: 0xc8283c, roughness: 0.6, emissive: 0x500810, emissiveIntensity: 0.6 });
+  const eye = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const pupil = new THREE.MeshBasicMaterial({ color: 0x101010 });
+  const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, sx = 1, sy = 1, sz = 1): THREE.Mesh => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.scale.set(sx, sy, sz);
+    g.add(m);
+    return m;
+  };
+  const sph = (r: number) => new THREE.SphereGeometry(r, 16, 12);
+  add(sph(0.3), fur, 0, 0, 0, 1, 1.15, 0.9); // cuerpo
+  add(sph(0.2), light, 0, -0.02, -0.2, 1, 1.1, 0.5); // panza
+  add(sph(0.22), fur, 0, 0.5, 0); // cabeza
+  add(sph(0.1), light, 0, 0.45, -0.2, 1, 0.8, 0.9); // hocico
+  add(sph(0.035), pupil, 0, 0.5, -0.29); // nariz
+  add(sph(0.1), fur, -0.17, 0.7, 0); // orejas
+  add(sph(0.1), fur, 0.17, 0.7, 0);
+  add(sph(0.05), light, -0.17, 0.7, -0.05);
+  add(sph(0.05), light, 0.17, 0.7, -0.05);
+  add(sph(0.055), eye, -0.09, 0.56, -0.19);
+  add(sph(0.055), eye, 0.09, 0.56, -0.19);
+  add(sph(0.028), pupil, -0.09, 0.56, -0.235);
+  add(sph(0.028), pupil, 0.09, 0.56, -0.235);
+  add(sph(0.11), fur, -0.36, 0.12, -0.02, 0.9, 1.5, 0.9).rotation.z = -0.5; // brazos
+  add(sph(0.11), fur, 0.36, 0.12, -0.02, 0.9, 1.5, 0.9).rotation.z = 0.5;
+  add(sph(0.12), fur, -0.17, -0.42, -0.08, 1, 0.9, 1.4); // patas
+  add(sph(0.12), fur, 0.17, -0.42, -0.08, 1, 0.9, 1.4);
+  add(new THREE.ConeGeometry(0.09, 0.16, 8), bow, -0.1, 0.3, -0.18).rotation.z = Math.PI / 2; // lazo
+  add(new THREE.ConeGeometry(0.09, 0.16, 8), bow, 0.1, 0.3, -0.18).rotation.z = -Math.PI / 2;
+  add(sph(0.045), bow, 0, 0.3, -0.18);
+  g.scale.setScalar(1.15);
+  return g;
 }
 
 // --- Mejorador de armas ----------------------------------------------------------------------------

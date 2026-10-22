@@ -1,44 +1,9 @@
-// Clima de la noche: lluvia (miles de trazos que se mueven por completo en el vertex shader y no caen dentro de
-// los recintos con techo), ceniza y brasas flotando, bancos de niebla a ras de suelo y relámpagos con su trueno.
-// Todo es barato: unas pocas llamadas de dibujo y cero trabajo de CPU por gota.
+// Clima de la noche: ceniza y brasas flotando, bancos de niebla a ras de suelo y relámpagos con su trueno. Ya no
+// llueve (petición del usuario: se quitó la lluvia; el shader y el reparto de gotas se eliminaron).
+// Todo es barato: unas pocas llamadas de dibujo y cero trabajo de CPU por partícula.
 import * as THREE from "three";
-import { INTERIORS } from "../world/mapdata";
 
-const RAIN = 2600;
 const ASH = 260;
-
-/** Rectángulos con techo para el shader (x0, z0, x1, z1). */
-const ROOFS = INTERIORS.map((r) => new THREE.Vector4(r.x0, r.z0, r.x1, r.z1));
-
-const RAIN_VERT = `
-  attribute vec3 seed;
-  attribute float tip;
-  uniform float uTime;
-  uniform vec3 uCam;
-  uniform vec3 uSize;
-  uniform vec3 uWind;
-  uniform vec4 uRoofs[${ROOFS.length}];
-  varying float vA;
-  void main() {
-    vec3 fall = vec3(uWind.x, -26.0, uWind.z);
-    vec3 p = mod(seed * uSize + fall * uTime - uCam, uSize) + uCam - uSize * 0.5;
-    p.y = mod(seed.y * uSize.y + fall.y * uTime, uSize.y);
-    float sheltered = 0.0;
-    for (int i = 0; i < ${ROOFS.length}; i++) {
-      vec4 r = uRoofs[i];
-      if (p.x > r.x && p.x < r.z && p.z > r.y && p.z < r.w && p.y < 4.2) sheltered = 1.0;
-    }
-    vec3 dir = normalize(fall);
-    vec3 q = p - dir * (0.9 * tip);
-    float dist = length(q - uCam);
-    vA = (1.0 - sheltered) * (1.0 - smoothstep(9.0, 20.0, dist)) * (0.28 + 0.2 * tip);
-    gl_Position = projectionMatrix * viewMatrix * vec4(q, 1.0);
-  }`;
-
-const RAIN_FRAG = `
-  varying float vA;
-  uniform vec3 uColor;
-  void main() { if (vA < 0.01) discard; gl_FragColor = vec4(uColor, vA); }`;
 
 const ASH_VERT = `
   attribute vec3 seed;
@@ -115,43 +80,11 @@ export class Weather {
   private nextBolt = 8 + Math.random() * 10;
   private bolt = 0;
   private pulses = 0;
-  private readonly rainU: Record<string, THREE.IUniform>;
   private readonly ashU: Record<string, THREE.IUniform>;
   private readonly mists: THREE.ShaderMaterial[] = [];
   private readonly disposables: { dispose(): void }[] = [];
 
   constructor(private readonly hooks: WeatherHooks = {}) {
-    // Lluvia.
-    const seed = new Float32Array(RAIN * 2 * 3);
-    const tip = new Float32Array(RAIN * 2);
-    for (let i = 0; i < RAIN; i++) {
-      const a = Math.random();
-      const b = Math.random();
-      const c = Math.random();
-      for (let k = 0; k < 2; k++) {
-        seed.set([a, b, c], (i * 2 + k) * 3);
-        tip[i * 2 + k] = k;
-      }
-    }
-    const rainGeo = new THREE.BufferGeometry();
-    rainGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(RAIN * 2 * 3), 3));
-    rainGeo.setAttribute("seed", new THREE.BufferAttribute(seed, 3));
-    rainGeo.setAttribute("tip", new THREE.BufferAttribute(tip, 1));
-    this.rainU = {
-      uTime: { value: 0 },
-      uCam: { value: new THREE.Vector3() },
-      uSize: { value: new THREE.Vector3(40, 26, 40) },
-      uWind: { value: new THREE.Vector3(2.5, 0, 1.2) },
-      uRoofs: { value: ROOFS },
-      uColor: { value: new THREE.Color(0.62, 0.72, 0.9) },
-    };
-    const rainMat = new THREE.ShaderMaterial({ uniforms: this.rainU, vertexShader: RAIN_VERT, fragmentShader: RAIN_FRAG, transparent: true, depthWrite: false, fog: false });
-    const rain = new THREE.LineSegments(rainGeo, rainMat);
-    rain.frustumCulled = false;
-    rain.renderOrder = 5;
-    this.group.add(rain);
-    this.disposables.push(rainGeo, rainMat);
-
     // Ceniza y brasas.
     const aSeed = new Float32Array(ASH * 3);
     const aKind = new Float32Array(ASH);
@@ -208,8 +141,6 @@ export class Weather {
   }
 
   update(dt: number, time: number, cam: THREE.Vector3): void {
-    this.rainU.uTime.value = time;
-    (this.rainU.uCam.value as THREE.Vector3).copy(cam);
     this.ashU.uTime.value = time;
     (this.ashU.uCam.value as THREE.Vector3).copy(cam);
     for (const m of this.mists) {

@@ -32,6 +32,8 @@ export class Player {
   crouching = false;
   sprinting = false;
   health: number = PLAYER.maxHealth;
+  /** Vida máxima (Juggernog la sube). */
+  maxHealth: number = PLAYER.maxHealth;
   /** Distancia recorrida acumulada (vaivén de cámara). */
   private travel = 0;
   /** Amplitud actual del vaivén, suavizada. */
@@ -48,7 +50,7 @@ export class Player {
     this.velocity.set(0, 0, 0);
     this.yaw = yaw;
     this.pitch = 0;
-    this.health = PLAYER.maxHealth;
+    this.health = this.maxHealth;
     this.onGround = true;
     this.crouching = false;
     this.sprinting = false;
@@ -167,6 +169,6 @@ export class Player {
   }
 
   heal(amount: number): void {
-    this.health = Math.min(PLAYER.maxHealth, this.health + amount);
+    this.health = Math.min(this.maxHealth, this.health + amount);
   }
 }

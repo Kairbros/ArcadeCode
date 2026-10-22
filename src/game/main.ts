@@ -229,7 +229,7 @@ function startGame(id: GameId) {
   }
   if (id === "deadzone") {
     // Tú solo contra las oleadas (en red se suman hasta tres jugadores más).
-    const game = new DeadZoneHost(new DeadZoneInput(keyboard), 0, "local");
+    const game = new DeadZoneHost(new DeadZoneInput(keyboard), 0, "local", null);
     play({
       size: game.size, update: (dt) => game.update(dt), draw: (c, s) => game.draw(c, s), key: (code) => game.key(code),
       get finished() { return game.finished; }, switchGame: startLocal,

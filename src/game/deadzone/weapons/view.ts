@@ -3,7 +3,7 @@
 // siempre va delante de los ojos.
 import * as THREE from "three";
 import { damp } from "../core/math";
-import { weaponDef, type WeaponDef, type WeaponId } from "./defs";
+import { KNIFE, SIGHTS, weaponDef, type WeaponDef, type WeaponId } from "./defs";
 import { buildWeaponModel, type WeaponModel } from "./model";
 
 let starTex: THREE.CanvasTexture | null = null;
@@ -33,6 +33,29 @@ function star(): THREE.CanvasTexture {
   return starTex;
 }
 
+/** Cuchillo de combate con su mano: se ve solo mientras dura el tajo. */
+function buildKnife(): THREE.Group {
+  const g = new THREE.Group();
+  const steel = new THREE.MeshStandardMaterial({ color: 0xd2d8e0, metalness: 0.85, roughness: 0.28 });
+  const grip = new THREE.MeshStandardMaterial({ color: 0x1e1a16, roughness: 0.8 });
+  const skin = new THREE.MeshStandardMaterial({ color: 0x8c6a56, roughness: 0.9 });
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.05, 0.3), steel);
+  blade.position.z = -0.2;
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.07, 4), steel);
+  tip.rotation.x = -Math.PI / 2;
+  tip.scale.set(0.75, 1, 1);
+  tip.position.z = -0.385;
+  const guard = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.03, 0.02), grip);
+  guard.position.z = -0.045;
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.04, 0.12), grip);
+  handle.position.z = 0.02;
+  const hand = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.09), skin);
+  hand.position.set(0, -0.005, 0.03);
+  g.add(blade, tip, guard, handle, hand);
+  g.visible = false;
+  return g;
+}
+
 export class WeaponView {
   readonly group = new THREE.Group();
   private readonly holder = new THREE.Group();
@@ -40,6 +63,7 @@ export class WeaponView {
   private cur: WeaponModel | null = null;
   private curKey = "";
   private curDef: WeaponDef | null = null;
+  private curId: WeaponId | null = null;
   private readonly flash = new THREE.Group();
   private readonly flashMats: THREE.MeshBasicMaterial[] = [];
   private readonly flashLight: THREE.PointLight;
@@ -54,9 +78,12 @@ export class WeaponView {
   private switchAnim = 0;
   private ads = 0;
   private time = 0;
+  private readonly knife = buildKnife();
+  private knifeT = 0;
 
   constructor(camera: THREE.Camera) {
     this.group.add(this.holder);
+    this.group.add(this.knife);
     this.holder.scale.setScalar(0.86);
     camera.add(this.group);
     // Fogonazo: dos planos cruzados con el destello, aditivos.
@@ -94,6 +121,7 @@ export class WeaponView {
     this.cur?.group.removeFromParent();
     this.cur = null;
     this.curDef = null;
+    this.curId = id;
     if (!id) return;
     const m = this.model(id, upgraded);
     this.cur = m;
@@ -117,6 +145,17 @@ export class WeaponView {
     if (!this.cur) return out.set(0, 0, 0);
     this.group.updateWorldMatrix(true, true);
     return this.cur.group.localToWorld(out.copy(this.cur.eject));
+  }
+
+  /** 0..1: cuánto cubre la pantalla la mira telescópica (solo con armas de mira telescópica, ya casi apuntando). */
+  get scopeK(): number {
+    if (!this.curId || !SIGHTS[this.curId].scope) return 0;
+    return Math.max(0, Math.min(1, (this.ads - 0.8) / 0.2));
+  }
+
+  /** Tajo de cuchillo: esconde el arma y cruza el cuchillo por delante de la cámara. */
+  slash(): void {
+    this.knifeT = KNIFE.swing;
   }
 
   /** Disparo: retroceso, corredera y fogonazo. */
@@ -148,6 +187,16 @@ export class WeaponView {
     this.ads = damp(this.ads, opts.ads ? 1 : 0, 10, dt);
     this.reloadAnim = damp(this.reloadAnim, opts.reloading ? 1 : 0, 7, dt);
     this.switchAnim = Math.max(0, this.switchAnim - dt);
+    this.knifeT = Math.max(0, this.knifeT - dt);
+    this.holder.visible = this.knifeT <= 0;
+    this.knife.visible = this.knifeT > 0 && !opts.hidden;
+    if (this.knife.visible) {
+      // Barrido de derecha a izquierda con un pequeño estoque al final.
+      const k = 1 - this.knifeT / KNIFE.swing;
+      const e = Math.sin(Math.min(1, k) * Math.PI);
+      this.knife.position.set(0.3 - k * 0.5, -0.17 + e * 0.07, -0.36 - e * 0.1);
+      this.knife.rotation.set(-0.15 - e * 0.25, 0.9 - k * 1.7, 0.55 - k * 1.1);
+    }
     this.sway += dt * (2 + opts.moving * 7);
     // Las armas mejoradas laten.
     if (this.cur) for (const g of this.cur.glow) g.emissiveIntensity = 2.2 + Math.sin(this.time * 4.5) * 0.9;
@@ -170,9 +219,12 @@ export class WeaponView {
     const hipX = 0.19 + bobX;
     const hipY = -0.19 + bobY + sprintDrop - switchDrop - this.reloadAnim * 0.11;
     const hipZ = -0.4 + this.kickZ;
-    const adsX = 0 + bobX * 0.3;
-    const adsY = -0.092 + bobY * 0.3 - switchDrop - this.reloadAnim * 0.1;
-    const adsZ = -0.28 + this.kickZ * 0.6;
+    // Al apuntar, el modelo se coloca para que el punto de su línea de mira quede justo en el centro de la pantalla.
+    const sg = this.curId ? SIGHTS[this.curId] : null;
+    const sc = this.holder.scale.x;
+    const adsX = bobX * 0.2;
+    const adsY = (sg ? -sc * sg.y : -0.092) + bobY * 0.25 - switchDrop - this.reloadAnim * 0.1;
+    const adsZ = (sg ? -sg.relief - sc * sg.z : -0.28) + this.kickZ * 0.6;
 
     this.holder.position.set(
       hipX + (adsX - hipX) * this.ads,
@@ -184,6 +236,8 @@ export class WeaponView {
       (1 - this.ads) * 0.07 + this.reloadAnim * 0.35 + (opts.sprinting ? -0.5 : 0),
       (1 - this.ads) * 0.03 + this.switchAnim * 0.4,
     );
+    // Con la mira telescópica a pantalla completa no se ve el arma (se dibuja la retícula encima).
+    if (this.scopeK > 0.6) this.holder.visible = false;
   }
 
   dispose(): void {
