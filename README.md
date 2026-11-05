@@ -20,13 +20,13 @@ cambiar a otro sin cerrar la sala (tecla **J**).
   de fogueo y repites turno. 3 rondas (2, 4 y 5 vidas) y 9 objetos: lupa, cigarrillos, cerveza,
   sierra, esposas, teléfono, inversor, medicina caducada y adrenalina. En la última ronda, con
   2 vidas o menos, no hay curas.
-- **Bloques**: mundo de bloques en primera persona para construir juntos (modo creativo, base para
-  crecer). Mundo de 96 × 48 × 96 generado por semilla (colinas, ríos, playas, árboles, cuevas con menas de
+- **Bloques**: mundo de bloques en primera persona. En el selector es una sola entrada; al elegirla se
+  pregunta el modo (creativo o supervivencia). **Creativo**: para construir juntos. Mundo de 96 × 48 × 96 generado por semilla (colinas, ríos, playas, árboles, cuevas con menas de
   carbón, hierro y diamante); romper y poner 9 tipos de bloque (antorchas incluidas) y volar. Bajo tierra
   está oscuro: la luz del cielo no llega y las antorchas alumbran. Hay **día y noche** (un día entero son 10
   minutos): atardece, salen la luna y las estrellas y de noche todo se oscurece. En red el mundo es el del anfitrión y todos ven los cambios de todos.
   No tiene final: J cambia de juego en cualquier momento.
-- **Bloques: supervivencia**: el mismo mundo, pero romper lleva tiempo (más rápido con la herramienta
+- **Bloques, supervivencia**: el mismo mundo, pero romper lleva tiempo (más rápido con la herramienta
   adecuada), lo roto va al inventario y poner gasta. Inventario de 36 ranuras con crafteo 2×2 y mesa de
   trabajo 3×3, con el ratón como en Minecraft: tablones, palos, mesa, horno, antorchas y pico/hacha/pala/espada
   de madera, piedra, hierro y diamante. La piedra y el carbón piden pico; el hierro, pico de piedra; el

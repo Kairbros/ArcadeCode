@@ -191,7 +191,7 @@ function mark(o: THREE.Object3D): THREE.Object3D {
 // línea de mira va a y ≈ 0,05.
 function pistol(b: Builder): { muzzle: number; eject: [number, number, number]; left: [number, number] } {
   // Armazón de polímero con el guardamonte y la empuñadura.
-  b.slab([[-0.075, 0.012], [0.19, 0.012], [0.19, 0.04], [0.02, 0.045], [-0.075, 0.045]], 0.03, b.poly);
+  b.slab([[-175, 0.012], [0.19, 0.012], [0.19, 0.04], [0.02, 0.045], [-0.075, 0.045]], 0.03, b.poly);
   b.slab([[0.0, 0.014], [0.07, 0.014], [0.07, -0.012], [0.05, -0.03], [0.012, -0.03], [0.0, -0.01]], 0.022, b.poly); // guardamonte
   b.slab([[-0.078, 0.03], [-0.012, 0.03], [0.004, -0.128], [-0.066, -0.14]], 0.034, b.poly, 0, 0, 0, 0.004);
   for (let i = 0; i < 4; i++) b.accent(0.037, 0.006, 0.05, 0, -0.01 - i * 0.026, -0.036 + i * 0.002);

@@ -7,7 +7,21 @@ import { GuestSession } from "../src/game/net/guest";
 import { Keyboard } from "../src/game/core/keyboard";
 import { World } from "../src/game/blocks/world";
 import { meshChunk } from "../src/game/blocks/mesher";
+import { GAMES, pickerEntries } from "../src/game/hub";
 import { check } from "./lib";
+
+// Selector: Bloques sale una sola vez y desde él se llega a creativo y supervivencia; ningún juego queda fuera.
+{
+  const entries = pickerEntries();
+  const reach = entries.flatMap((e) => ("group" in e ? e.group.modes.map((m) => m.id) : [e.game.id]));
+  const blocks = entries.filter((e) => "group" in e && e.group.name === "Bloques").length;
+  const loose = entries.filter((e) => "game" in e && (e.game.id === "blocks" || e.game.id === "survival")).length;
+  check(
+    blocks === 1 && loose === 0 && reach.length === GAMES.length && GAMES.every((g) => reach.includes(g.id)),
+    "selector: Bloques es una entrada con dos modos y se llega a todos los juegos",
+    `entradas ${entries.length}, juegos ${GAMES.length}`,
+  );
+}
 
 // Sumo: 4 IA, la ronda siempre acaba con un ganador antes de 2 min.
 {

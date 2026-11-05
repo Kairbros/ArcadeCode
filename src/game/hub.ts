@@ -47,6 +47,38 @@ export const GAMES: GameInfo[] = [
   { id: "deadzone", name: "Dead Zone: Outbreak", desc: "FPS cooperativo de zombis · rondas, armas y barricadas · 3D · 1–4 jugadores" },
 ];
 
+/** Un juego con varios modos (cada modo es un GameId propio, así la red no cambia). */
+export interface GameGroup {
+  name: string;
+  desc: string;
+  modes: { id: GameId; label: string; note: string }[];
+}
+
+/** En el selector salen una sola vez, en el sitio de su primer modo, y al elegirlos se pregunta el modo. */
+export const GAME_GROUPS: GameGroup[] = [
+  {
+    name: "Bloques",
+    desc: "Mundo de bloques para construir o sobrevivir juntos · 3D",
+    modes: [
+      { id: "blocks", label: "Creativo", note: "Todos los bloques, vuelo y sin peligros" },
+      { id: "survival", label: "Supervivencia", note: "Rompe, recoge, craftea y aguanta la noche" },
+    ],
+  },
+];
+
+/** Entradas del selector de juego: juegos sueltos y grupos con modos. */
+export type PickerEntry = { game: GameInfo } | { group: GameGroup };
+
+export function pickerEntries(): PickerEntry[] {
+  const out: PickerEntry[] = [];
+  for (const game of GAMES) {
+    const group = GAME_GROUPS.find((g) => g.modes.some((m) => m.id === game.id));
+    if (!group) out.push({ game });
+    else if (group.modes[0].id === game.id) out.push({ group });
+  }
+  return out;
+}
+
 export function isGameId(id: unknown): id is GameId {
   return GAMES.some((g) => g.id === id);
 }

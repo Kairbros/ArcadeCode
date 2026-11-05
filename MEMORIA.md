@@ -302,8 +302,10 @@ src/game/blocks/           config, blocks (tipos), world (generación con cuevas
 - Ratón: `pointer lock` al hacer clic en el lienzo (`input.ts`; las escuchas se enganchan una sola vez y no tocan el
   DOM hasta el primer `poll`); `releasePointer` al abrir el menú o el selector. Sin ratón: flechas para mirar y Q/Enter.
   **La webview de VS Code sí captura el puntero** (lo confirmó el usuario el 2026-10-19): el juego se diseña con ratón.
-- Dos entradas en el hub con las mismas clases: `"blocks"` (creativo) y `"survival"` (`BlocksMode`; el `snap.g` y el
-  `id` del invitado dicen cuál). Esc pasa primero por `escape()` del juego (`HostGame`/`GuestGame`/`Screen`, opcional):
+- Dos ids en el hub con las mismas clases: `"blocks"` (creativo) y `"survival"` (`BlocksMode`; el `snap.g` y el
+  `id` del invitado dicen cuál). En el selector salen como **una sola entrada «Bloques»** que luego pregunta el modo
+  (`GAME_GROUPS` y `pickerEntries` en `hub.ts`; `Menu.showPicker` abre `showChoice`; 2026-10-22, petición del usuario).
+  Vale para elegir en local, al crear sala y con J. Para dar modos a otro juego: un id por modo en `GAMES` y su grupo en `GAME_GROUPS`. Esc pasa primero por `escape()` del juego (`HostGame`/`GuestGame`/`Screen`, opcional):
   si cierra un inventario, no se sale al menú.
 - **Supervivencia** (petición del usuario: "lo básico, romper, craftear"):
   - Romper: mantener; el progreso es `dt × velocidad / BLOCKS[b].hard` (s a mano). Con la herramienta de su `tool`,

@@ -1,6 +1,6 @@
 // Menú HTML superpuesto al lienzo: elegir juego, crear sala, unirse, sala de espera.
 // Pensado para la barra lateral de VS Code: se adapta a anchos y altos muy pequeños.
-import { GAMES, type GameId } from "../hub";
+import { pickerEntries, type GameId } from "../hub";
 import { MAX_NAME } from "../core/settings";
 import type { RGB } from "../core/config";
 import { titleText, titleWidth } from "../core/draw";
@@ -205,18 +205,25 @@ export class Menu {
     });
   }
 
-  /** Elegir juego del hub. */
+  /** Elegir juego del hub. Los juegos con varios modos (Bloques) preguntan después cuál. */
   showPicker(title: string, onPick: (id: GameId) => void, onBack: () => void) {
-    const options = GAMES.map(
-      (g, i) => `<button data-game="${g.id}" class="bm-game" style="--accent:${GAME_ACCENTS[i % GAME_ACCENTS.length]}"><b>${esc(g.name)}</b><span class="bm-optional">${esc(g.desc)}</span></button>`,
-    ).join("");
+    const entries = pickerEntries();
+    const options = entries.map((e, i) => {
+      const { name, desc } = "group" in e ? e.group : e.game;
+      return `<button data-i="${i}" class="bm-game" style="--accent:${GAME_ACCENTS[i % GAME_ACCENTS.length]}"><b>${esc(name)}</b><span class="bm-optional">${esc(desc)}</span></button>`;
+    }).join("");
     const card = this.render(`
       <h2>${esc(title)}</h2>
       ${options}
       <button data-a="back" class="bm-secondary bm-small">Volver</button>
     `);
-    card.querySelectorAll<HTMLButtonElement>("[data-game]").forEach((b) => {
-      b.onclick = () => onPick(b.dataset.game as GameId);
+    card.querySelectorAll<HTMLButtonElement>("[data-i]").forEach((b) => {
+      const e = entries[Number(b.dataset.i)];
+      b.onclick = () => {
+        if ("game" in e) return onPick(e.game.id);
+        const { modes } = e.group;
+        this.showChoice(e.group.name, "Elige el modo", modes, (k) => onPick(modes[k].id), () => this.showPicker(title, onPick, onBack));
+      };
     });
     card.querySelector<HTMLButtonElement>('[data-a="back"]')!.onclick = onBack;
   }
